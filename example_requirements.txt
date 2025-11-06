@@ -1,0 +1,7 @@
+# Example requirements file for testing
+# Common packages with various dependencies
+
+requests>=2.28.0
+flask>=2.3.0
+pandas>=1.5.0
+numpy>=1.23.0

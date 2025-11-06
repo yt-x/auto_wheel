@@ -1,0 +1,10 @@
+{
+  "index_url": "",
+  "trusted_hosts": [],
+  "extra_index_urls": [],
+  "default_python_version": "3.9",
+  "default_platform": "auto",
+  "download_dir": "./downloads",
+  "timeout": 300,
+  "retries": 3
+}
