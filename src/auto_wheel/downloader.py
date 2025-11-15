@@ -4,9 +4,9 @@ Package download module
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-import json
 
 
 class WheelDownloader:
@@ -21,7 +21,10 @@ class WheelDownloader:
         abi: Optional[str] = None,
         only_binary: str = ":all:",
         verbose: bool = False,
-        config_pip_args: Optional[List[str]] = None
+        config_pip_args: Optional[List[str]] = None,
+        max_attempts: int = 3,
+        retry_delay: float = 3.0,
+        command_timeout: Optional[int] = None
     ):
         """
         Initialize downloader
@@ -35,6 +38,9 @@ class WheelDownloader:
             only_binary: Only download binary wheels (default: ":all:")
             verbose: Enable verbose output
             config_pip_args: Additional pip arguments from config
+            max_attempts: Maximum times to invoke pip download when failures occur
+            retry_delay: Seconds to wait between attempts (linear backoff)
+            command_timeout: Overall timeout (seconds) for each pip invocation
         """
         self.python_version = python_version
         self.output_dir = Path(output_dir)
@@ -44,6 +50,9 @@ class WheelDownloader:
         self.only_binary = only_binary
         self.verbose = verbose
         self.config_pip_args = config_pip_args or []
+        self.max_attempts = max(1, max_attempts)
+        self.retry_delay = max(0.0, retry_delay)
+        self.command_timeout = command_timeout if command_timeout and command_timeout > 0 else None
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -162,32 +171,82 @@ class WheelDownloader:
                 "command": " ".join(cmd)
             }
 
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
+        errors: List[Dict[str, Any]] = []
 
+        for attempt in range(1, self.max_attempts + 1):
             if self.verbose:
-                print(result.stdout)
+                print(f"[Attempt {attempt}/{self.max_attempts}] Starting pip download...")
 
-            return {
-                "success": True,
-                "output": result.stdout,
-                "downloaded_to": str(self.output_dir)
-            }
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=self.command_timeout
+                )
 
-        except subprocess.CalledProcessError as e:
-            error_msg = f"Download failed: {e.stderr}"
-            print(error_msg, file=sys.stderr)
-            return {
-                "success": False,
-                "error": error_msg,
-                "stdout": e.stdout,
-                "stderr": e.stderr
-            }
+                if self.verbose:
+                    print(result.stdout)
+
+                return {
+                    "success": True,
+                    "output": result.stdout,
+                    "downloaded_to": str(self.output_dir),
+                    "attempts": attempt
+                }
+
+            except subprocess.TimeoutExpired as exc:
+                error_msg = (
+                    f"Attempt {attempt}/{self.max_attempts} timed out after "
+                    f"{self.command_timeout or 'unknown'} seconds."
+                )
+                errors.append({
+                    "type": "timeout",
+                    "message": error_msg,
+                    "stdout": exc.stdout,
+                    "stderr": exc.stderr
+                })
+                print(error_msg, file=sys.stderr)
+
+            except subprocess.CalledProcessError as exc:
+                error_msg = (
+                    f"Attempt {attempt}/{self.max_attempts} failed with exit code {exc.returncode}."
+                )
+                errors.append({
+                    "type": "process_error",
+                    "message": error_msg,
+                    "stdout": exc.stdout,
+                    "stderr": exc.stderr
+                })
+                print(error_msg, file=sys.stderr)
+
+            except OSError as exc:
+                error_msg = (
+                    f"Attempt {attempt}/{self.max_attempts} could not start pip: {exc}"
+                )
+                errors.append({
+                    "type": "os_error",
+                    "message": error_msg,
+                    "stdout": None,
+                    "stderr": str(exc)
+                })
+                print(error_msg, file=sys.stderr)
+
+            if attempt < self.max_attempts:
+                wait_time = self.retry_delay * attempt
+                if wait_time > 0:
+                    if self.verbose:
+                        print(f"Retrying in {wait_time:.1f}s...", file=sys.stderr)
+                    time.sleep(wait_time)
+
+        last_error = errors[-1] if errors else {"message": "Unknown error"}
+        return {
+            "success": False,
+            "error": last_error["message"],
+            "errors": errors,
+            "downloaded_to": str(self.output_dir)
+        }
 
     def get_downloaded_packages(self) -> List[Path]:
         """

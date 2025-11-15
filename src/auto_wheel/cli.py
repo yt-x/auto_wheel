@@ -24,55 +24,56 @@ def parse_arguments(args: Optional[List[str]] = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Download packages from requirements.txt for Python 3.9
-  auto-wheel -p 3.9 -r requirements.txt
+    # Download packages from requirements.txt for Python 3.9
+    auto-wheel -p 3.9 -r requirements.txt
 
-  # Download specific packages
-  auto-wheel -p 3.9 -pkg requests flask pandas
+    # Download specific packages
+    auto-wheel -p 3.9 -pkg requests flask pandas
 
-  # Specify output directory
-  auto-wheel -p 3.9 -r requirements.txt -o ./my_wheels
+    # Specify output directory
+    auto-wheel -p 3.9 -r requirements.txt -o ./my_wheels
 
-  # Specify target platform
-  auto-wheel -p 3.9 -r requirements.txt --platform manylinux2014_x86_64
+    # Specify target platform
+    auto-wheel -p 3.9 -r requirements.txt --platform manylinux2014_x86_64
 
-  # Use custom config file
-  auto-wheel -p 3.9 -r requirements.txt -c config.json
-        """
+    # Use custom config file
+    auto-wheel -p 3.9 -r requirements.txt -c config.json
+        """,
     )
 
     # Python version
     parser.add_argument(
-        "-p", "--python-version",
+        "-p",
+        "--python-version",
         type=str,
-        help="Target Python version (e.g., 3.9, 3.10, 3.11)"
+        help="Target Python version (e.g., 3.9, 3.10, 3.11)",
     )
 
     # Input source: either requirements file or package names
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument(
-        "-r", "--requirements",
-        type=str,
-        help="Path to requirements.txt file"
+        "-r", "--requirements", type=str, help="Path to requirements.txt file"
     )
     input_group.add_argument(
-        "-pkg", "--packages",
+        "-pkg",
+        "--packages",
         nargs="+",
-        help="Package names to download (space separated)"
+        help="Package names to download (space separated)",
     )
 
     # Output directory
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         type=str,
-        help="Output directory for downloaded wheels (default: ./downloads)"
+        help="Output directory for downloaded wheels (default: ./downloads)",
     )
 
     # Platform specification
     parser.add_argument(
         "--platform",
         type=str,
-        help="Target platform (e.g., win_amd64, manylinux2014_x86_64, macosx_10_9_x86_64, auto)"
+        help="Target platform (e.g., win_amd64, manylinux2014_x86_64, macosx_10_9_x86_64, auto)",
     )
 
     # Implementation (CPython, PyPy, etc.)
@@ -80,28 +81,26 @@ Examples:
         "--implementation",
         type=str,
         default="cp",
-        help="Python implementation (default: cp for CPython)"
+        help="Python implementation (default: cp for CPython)",
     )
 
     # ABI
     parser.add_argument(
         "--abi",
         type=str,
-        help="Python ABI (e.g., cp39, none). If not specified, auto-detected from Python version"
+        help="Python ABI (e.g., cp39, none). If not specified, auto-detected from Python version",
     )
 
     # Config file
     parser.add_argument(
-        "-c", "--config",
-        type=str,
-        help="Path to configuration file (JSON format)"
+        "-c", "--config", type=str, help="Path to configuration file (JSON format)"
     )
 
     # Generate requirements with hashes
     parser.add_argument(
         "--with-hashes",
         action="store_true",
-        help="Generate requirements.txt with package hashes for secure installation"
+        help="Generate requirements.txt with package hashes for secure installation",
     )
 
     # Only binary (no source distributions)
@@ -109,21 +108,19 @@ Examples:
         "--only-binary",
         type=str,
         default=":all:",
-        help="Only download binary wheels, no source distributions (default: :all:)"
+        help="Only download binary wheels, no source distributions (default: :all:)",
     )
 
     # Verbose output
     parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose output"
+        "-v", "--verbose", action="store_true", help="Enable verbose output"
     )
 
     # Dry run
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show what would be downloaded without actually downloading"
+        help="Show what would be downloaded without actually downloading",
     )
 
     return parser.parse_args(args)
@@ -158,8 +155,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
         try:
             major, minor = int(parts[0]), int(parts[1])
             if major < 3 or (major == 3 and minor < 7):
-                print(f"Warning: Python {args.python_version} is quite old. "
-                      "Some packages may not be available.")
+                print(
+                    f"Warning: Python {args.python_version} is quite old. "
+                    "Some packages may not be available."
+                )
         except ValueError:
             raise ValueError(
                 f"Invalid Python version: {args.python_version}. "

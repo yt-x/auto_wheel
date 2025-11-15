@@ -11,10 +11,19 @@ dependencies = [
     "pip>=21.0",
     "packaging>=21.0",
     "tqdm>=4.62.0",
+    "pyqt6>=6.7",
+    "qt-material>=2.14",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PyQt6>=6.7",
+    "qt-material>=2.14",
 ]
 
 [project.scripts]
 auto-wheel = "auto_wheel.main:main"
+auto-wheel-gui = "auto_wheel.gui.app:run"
 
 [build-system]
 requires = ["setuptools>=45", "wheel"]

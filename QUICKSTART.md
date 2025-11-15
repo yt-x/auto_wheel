@@ -14,8 +14,8 @@ pip install -e .
 ### 示例 1：下载示例包
 
 ```bash
-# 使用项目自带的示例 requirements.txt
-auto-wheel -p 3.9 -r example_requirements.txt
+# 使用项目提供的示例 requirements（examples/example_requirements.txt）
+auto-wheel -p 3.9 -r examples/example_requirements.txt
 ```
 
 这将下载 requests、flask、pandas、numpy 及其所有依赖到 `./downloads` 目录。
@@ -29,7 +29,7 @@ auto-wheel -p 3.9 -pkg requests flask
 ### 示例 3：模拟运行（不实际下载）
 
 ```bash
-auto-wheel -p 3.9 -r example_requirements.txt --dry-run
+auto-wheel -p 3.9 -r examples/example_requirements.txt --dry-run
 ```
 
 ## 3. 使用配置文件
@@ -38,7 +38,7 @@ auto-wheel -p 3.9 -r example_requirements.txt --dry-run
 
 ```bash
 # 复制示例配置
-cp config.example.json config.json
+cp examples/config.example.json config.json
 ```
 
 ### 编辑配置（可选）
@@ -57,7 +57,7 @@ cp config.example.json config.json
 ### 使用配置文件运行
 
 ```bash
-auto-wheel -p 3.9 -r example_requirements.txt -c config.json
+auto-wheel -p 3.9 -r examples/example_requirements.txt -c config.json
 ```
 
 ## 4. 离线安装
@@ -83,7 +83,7 @@ pip install --no-index --find-links=. -r requirements-offline.txt
 如果要在 Windows 上为 Linux 服务器下载包：
 
 ```bash
-auto-wheel -p 3.9 -r example_requirements.txt --platform manylinux2014_x86_64
+auto-wheel -p 3.9 -r examples/example_requirements.txt --platform manylinux2014_x86_64
 ```
 
 常见平台标识：
@@ -95,7 +95,7 @@ auto-wheel -p 3.9 -r example_requirements.txt --platform manylinux2014_x86_64
 ## 6. 安全安装（带 hash 校验）
 
 ```bash
-auto-wheel -p 3.9 -r example_requirements.txt --with-hashes
+auto-wheel -p 3.9 -r examples/example_requirements.txt --with-hashes
 ```
 
 这会在生成的 requirements-offline.txt 中包含每个包的 SHA256 hash，安装时会验证完整性。
@@ -111,13 +111,13 @@ auto-wheel --help
 ### 如何查看详细输出？
 
 ```bash
-auto-wheel -p 3.9 -r example_requirements.txt -v
+auto-wheel -p 3.9 -r examples/example_requirements.txt -v
 ```
 
 ### 下载到自定义目录？
 
 ```bash
-auto-wheel -p 3.9 -r example_requirements.txt -o ./my_packages
+auto-wheel -p 3.9 -r examples/example_requirements.txt -o ./my_packages
 ```
 
 ## 8. 完整工作流示例
@@ -156,8 +156,7 @@ auto_wheel/
 │       ├── downloader.py         # 下载功能
 │       └── requirements_generator.py  # requirements 生成
 ├── downloads/                    # 下载目录（自动创建）
-├── config.example.json           # 配置示例
-├── example_requirements.txt      # 测试用 requirements
+├── examples/                     # 示例配置与 requirements
 ├── pyproject.toml               # 项目配置
 └── README.md                    # 完整文档
 ```
@@ -165,5 +164,5 @@ auto_wheel/
 ## 10. 下一步
 
 - 阅读 [README.md](README.md) 了解更多高级功能
-- 查看 [config.example.json](config.example.json) 了解所有配置选项
-- 根据需要修改 `example_requirements.txt` 或创建自己的 requirements 文件
+- 查看 [examples/config.example.json](examples/config.example.json) 了解所有配置选项
+- 根据需要修改 `examples/example_requirements.txt` 或创建自己的 requirements 文件

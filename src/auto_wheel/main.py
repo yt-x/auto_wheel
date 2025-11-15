@@ -70,7 +70,10 @@ def main():
             abi=args.abi,
             only_binary=args.only_binary,
             verbose=args.verbose,
-            config_pip_args=config.get_pip_args()
+            config_pip_args=config.get_pip_args(),
+            max_attempts=max(1, config.retries),
+            retry_delay=3.0,
+            command_timeout=max(config.timeout, 60)
         )
 
         # Download packages

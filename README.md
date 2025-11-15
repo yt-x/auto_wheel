@@ -59,7 +59,7 @@ auto-wheel -p 3.9 -r requirements.txt --with-hashes
 
 ## 配置文件
 
-可以创建 `config.json` 来自定义设置：
+可以创建 `config.json` 来自定义设置（可参考 `examples/config.example.json`）：
 
 ```json
 {
@@ -200,6 +200,26 @@ auto-wheel -p 3.11 -r requirements.txt -o downloads/py311
 ```
 
 ## 技术说明
+
+> 想了解整体架构、重试策略、GUI 方案与离线脚本细节，可参阅 `docs/TECHNICAL_OVERVIEW.md` 与 `docs/GUI_DESIGN.md`。
+
+### 桌面 GUI（可选）
+
+项目提供 PyQt6 + qt-material 实现的桌面客户端，覆盖常用参数配置与日志查看。
+
+```bash
+# 安装 GUI 依赖
+pip install -e .[gui]
+
+# 启动客户端
+auto-wheel-gui
+```
+
+核心特性：
+
+- 纯代码构建界面，包含参数表单、日志控制台、进度展示与输出目录快捷打开。
+- 集成 `qt-material`，支持亮/暗主题切换并自动记忆用户偏好。
+- 行为与 CLI 完全一致，底层调用 `WheelDownloader` 与 `RequirementsGenerator`，不会影响现有命令行流程。
 
 ### 依赖解析
 
