@@ -3,7 +3,6 @@ Command line interface module
 """
 
 import argparse
-import sys
 from pathlib import Path
 from typing import List, Optional
 
