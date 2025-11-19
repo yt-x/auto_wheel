@@ -12,6 +12,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from ..config import Config
 from ..downloader import WheelDownloader
 from ..requirements_generator import RequirementsGenerator
+from ..resolver import DependencyResolver
+from ..resolver import DependencyResolver
 
 
 @dataclass
@@ -94,10 +96,32 @@ class DownloadWorker(QThread):
 
         self._log(f"开始下载（Python {python_version}, 平台 {platform}）...")
 
+        # 准备包列表
         if req.source_mode == "requirements":
-            result = downloader.download_from_requirements(req.requirements_path, dry_run=req.dry_run)
+            packages_input = self._load_requirements(req.requirements_path)
         else:
-            result = downloader.download_packages(req.packages, dry_run=req.dry_run)
+            packages_input = [pkg.strip() for pkg in req.packages if pkg.strip()]
+
+        if not packages_input:
+            raise ValueError("未找到需要处理的包，请检查输入")
+
+        resolver = DependencyResolver(
+            python_version=python_version,
+            platform=platform if platform != "auto" else None,
+            pip_args=config.get_pip_args(),
+            use_uv=config.use_uv_resolver,
+            timeout=req.timeout,
+            verbose=req.verbose,
+        )
+        resolved_packages, used_uv, resolver_warning = resolver.resolve(packages_input)
+        if resolver_warning:
+            self._log(f"解析提示：{resolver_warning}")
+
+        if req.dry_run:
+            # 仅打印命令
+            result = downloader.download_resolved_requirements(resolved_packages, dry_run=True)
+        else:
+            result = downloader.download_resolved_requirements(resolved_packages, dry_run=False)
 
         if not result.get("success"):
             errors = result.get("errors") or []
@@ -123,3 +147,14 @@ class DownloadWorker(QThread):
         summary = f"下载完成。离线 requirements：{req_file}，脚本：{script_path}"
         self._log(summary)
         self.finished.emit(True, summary)
+
+    @staticmethod
+    def _load_requirements(path: str) -> List[str]:
+        lines: List[str] = []
+        with open(path, "r", encoding="utf-8") as file_obj:
+            for raw_line in file_obj:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                lines.append(line)
+        return lines

@@ -48,3 +48,5 @@ Thumbs.db
 # AI
 AGENTS.md
 .serena/
+.claude
+evidence/

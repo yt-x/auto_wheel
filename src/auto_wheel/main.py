@@ -4,11 +4,25 @@ Main entry point for auto-wheel
 
 import sys
 from pathlib import Path
+from typing import List
 
 from .cli import parse_arguments, validate_arguments
 from .config import Config
 from .downloader import WheelDownloader
 from .requirements_generator import RequirementsGenerator
+from .resolver import DependencyResolver
+
+
+def _load_requirements(path: str) -> List[str]:
+    """Load requirement lines from file, ignoring comments/empty lines."""
+    lines: List[str] = []
+    with open(path, "r", encoding="utf-8") as file_obj:
+        for raw_line in file_obj:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            lines.append(line)
+    return lines
 
 
 def main():
@@ -76,20 +90,36 @@ def main():
             command_timeout=max(config.timeout, 60)
         )
 
-        # Download packages
+        # Prepare package list
+        if args.requirements:
+            packages_input = _load_requirements(args.requirements)
+        else:
+            packages_input = [pkg.strip() for pkg in (args.packages or []) if pkg.strip()]
+
+        if not packages_input:
+            raise ValueError("No packages to process. Check requirements file or --packages input.")
+
+        # Resolve dependencies (optional uv)
+        resolver = DependencyResolver(
+            python_version=python_version,
+            platform=platform if platform != "auto" else None,
+            pip_args=config.get_pip_args(),
+            use_uv=config.use_uv_resolver,
+            timeout=config.timeout,
+            verbose=args.verbose
+        )
+        resolved_packages, used_uv, resolver_warning = resolver.resolve(packages_input)
+
+        if resolver_warning:
+            print(f"Warning: {resolver_warning}", file=sys.stderr)
+
         print("Downloading packages...")
         print()
 
-        if args.requirements:
-            result = downloader.download_from_requirements(
-                args.requirements,
-                dry_run=args.dry_run
-            )
-        else:
-            result = downloader.download_packages(
-                args.packages,
-                dry_run=args.dry_run
-            )
+        result = downloader.download_resolved_requirements(
+            resolved_packages,
+            dry_run=args.dry_run
+        )
 
         # Check result
         if not result["success"]:

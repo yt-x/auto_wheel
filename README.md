@@ -70,7 +70,8 @@ auto-wheel -p 3.9 -r requirements.txt --with-hashes
   "default_platform": "auto",
   "download_dir": "./downloads",
   "timeout": 300,
-  "retries": 3
+  "retries": 3,
+  "use_uv_resolver": false
 }
 ```
 
@@ -79,6 +80,30 @@ auto-wheel -p 3.9 -r requirements.txt --with-hashes
 ```bash
 auto-wheel -p 3.9 -r requirements.txt -c config.json
 ```
+
+### 可选：启用 uv 解析
+
+`pip download --python-version` 在跨版本场景下可能无法获取条件依赖（例如 Python 3.9 + pytest 需要 `exceptiongroup`）。
+配置 `"use_uv_resolver": true` 且安装 [uv](https://github.com/astral-sh/uv) 后，auto-wheel 会先运行 `uv pip compile` 生成完整依赖，再执行 `pip download`。
+
+优点：
+
+- 正确处理环境标记，避免条件依赖缺失。
+- 解析速度更快。
+
+未启用或未安装 uv 时，会自动回退至原有行为，并在日志中提示可能缺失条件依赖。
+
+安装 uv 示例：
+
+```powershell
+# Windows PowerShell
+irm https://astral.sh/uv/install.ps1 | iex
+
+# macOS/Linux
+curl -Ls https://astral.sh/uv/install.sh | sh
+```
+
+安装完成后执行 `uv --version` 验证即可。
 
 ### 配置说明
 
@@ -90,6 +115,7 @@ auto-wheel -p 3.9 -r requirements.txt -c config.json
 - `download_dir`: 下载目录
 - `timeout`: 下载超时时间（秒）
 - `retries`: 重试次数
+- `use_uv_resolver`: 是否启用 uv pip compile 解析（默认 false）
 
 ### 常用镜像源
 
@@ -223,11 +249,11 @@ auto-wheel-gui
 
 ### 依赖解析
 
-工具使用 `pip download` 来解析和下载依赖包，会自动处理：
-- 传递依赖（依赖的依赖）
-- 版本约束和冲突
-- 平台特定的依赖
-- 可选依赖（extras）
+工具使用两阶段策略：
+1) 优先（可选）通过 `uv pip compile` 按目标 Python 版本/平台解析依赖，正确处理条件依赖（如 pytest<3.11 需要 exceptiongroup/tomli）。
+2) 使用 `pip download` 按解析结果下包。
+
+当未启用 uv 解析（配置 `use_uv_resolver:false` 或未安装 uv）时，行为与旧版一致，可能缺失跨版本条件依赖，日志会提示。
 
 ### 平台兼容性
 

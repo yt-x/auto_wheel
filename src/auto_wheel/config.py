@@ -19,7 +19,8 @@ class Config:
         "default_platform": "auto",
         "download_dir": "./downloads",
         "timeout": 300,
-        "retries": 3
+        "retries": 3,
+        "use_uv_resolver": False
     }
 
     def __init__(self, config_path: Optional[str] = None):
@@ -89,6 +90,11 @@ class Config:
     def retries(self) -> int:
         """Get retry count"""
         return self.config_data.get("retries", 3)
+
+    @property
+    def use_uv_resolver(self) -> bool:
+        """Whether to enable uv-based dependency resolver"""
+        return bool(self.config_data.get("use_uv_resolver", False))
 
     def get_pip_args(self) -> List[str]:
         """

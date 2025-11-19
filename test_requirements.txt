@@ -1,0 +1,5 @@
+# 测试 requirements 文件
+pytest>=8.0
+flask>=2.0
+
+# 这是一个注释，应该被忽略

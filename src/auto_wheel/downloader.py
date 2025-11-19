@@ -4,6 +4,7 @@ Package download module
 
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -127,6 +128,38 @@ class WheelDownloader:
         """
         cmd = self._build_pip_command(["-r", requirements_file], dry_run=dry_run)
         return self._execute_download(cmd, dry_run=dry_run)
+
+    def download_resolved_requirements(
+        self,
+        resolved_packages: List[str],
+        dry_run: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Download packages using resolved requirement list.
+
+        Args:
+            resolved_packages: List of pinned requirements
+            dry_run: If True, simulate download
+        """
+        if not resolved_packages:
+            return {
+                "success": False,
+                "error": "No resolved packages provided",
+                "downloaded_to": str(self.output_dir)
+            }
+
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as tmp_file:
+            tmp_file.write("\n".join(resolved_packages))
+            temp_path = tmp_file.name
+
+        try:
+            cmd = self._build_pip_command(["-r", temp_path], dry_run=dry_run)
+            return self._execute_download(cmd, dry_run=dry_run)
+        finally:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def download_packages(
         self,
