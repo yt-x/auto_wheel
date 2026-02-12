@@ -11,18 +11,7 @@ from .config import Config
 from .downloader import WheelDownloader
 from .requirements_generator import RequirementsGenerator
 from .resolver import DependencyResolver
-
-
-def _load_requirements(path: str) -> List[str]:
-    """Load requirement lines from file, ignoring comments/empty lines."""
-    lines: List[str] = []
-    with open(path, "r", encoding="utf-8") as file_obj:
-        for raw_line in file_obj:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            lines.append(line)
-    return lines
+from .utils import load_requirements
 
 
 def main():
@@ -87,12 +76,14 @@ def main():
             config_pip_args=config.get_pip_args(),
             max_attempts=max(1, config.retries),
             retry_delay=3.0,
-            command_timeout=max(config.timeout, 60)
+            # command_timeout: 整体 pip download 命令的超时（秒），最小 60
+            # pip_timeout: pip 内部单个网络请求的超时（由配置控制）
+            command_timeout=max(config.pip_timeout, 60)
         )
 
         # Prepare package list
         if args.requirements:
-            packages_input = _load_requirements(args.requirements)
+            packages_input = load_requirements(args.requirements)
         else:
             packages_input = [pkg.strip() for pkg in (args.packages or []) if pkg.strip()]
 

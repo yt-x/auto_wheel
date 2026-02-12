@@ -13,7 +13,7 @@ from ..config import Config
 from ..downloader import WheelDownloader
 from ..requirements_generator import RequirementsGenerator
 from ..resolver import DependencyResolver
-from ..resolver import DependencyResolver
+from ..utils import load_requirements
 
 
 @dataclass
@@ -98,7 +98,7 @@ class DownloadWorker(QThread):
 
         # 准备包列表
         if req.source_mode == "requirements":
-            packages_input = self._load_requirements(req.requirements_path)
+            packages_input = load_requirements(req.requirements_path)
         else:
             packages_input = [pkg.strip() for pkg in req.packages if pkg.strip()]
 
@@ -147,14 +147,3 @@ class DownloadWorker(QThread):
         summary = f"下载完成。离线 requirements：{req_file}，脚本：{script_path}"
         self._log(summary)
         self.finished.emit(True, summary)
-
-    @staticmethod
-    def _load_requirements(path: str) -> List[str]:
-        lines: List[str] = []
-        with open(path, "r", encoding="utf-8") as file_obj:
-            for raw_line in file_obj:
-                line = raw_line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                lines.append(line)
-        return lines

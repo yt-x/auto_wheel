@@ -3,7 +3,6 @@ Configuration management module
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
@@ -18,7 +17,7 @@ class Config:
         "default_python_version": "3.9",
         "default_platform": "auto",
         "download_dir": "./downloads",
-        "timeout": 300,
+        "pip_timeout": 300,  # pip --timeout: 单个网络请求超时（秒）
         "retries": 3,
         "use_uv_resolver": False
     }
@@ -82,9 +81,23 @@ class Config:
         return self.config_data.get("download_dir", "./downloads")
 
     @property
+    def pip_timeout(self) -> int:
+        """
+        Get pip timeout value (单个网络请求超时，秒）
+
+        用于传递给 pip 的 --timeout 参数
+        """
+        # 兼容旧配置中的 timeout 字段
+        return self.config_data.get("pip_timeout", self.config_data.get("timeout", 300))
+
+    @property
     def timeout(self) -> int:
-        """Get timeout value"""
-        return self.config_data.get("timeout", 300)
+        """
+        获取超时配置（向后兼容）
+
+        已废弃：请使用 pip_timeout 属性
+        """
+        return self.pip_timeout
 
     @property
     def retries(self) -> int:
@@ -117,8 +130,8 @@ class Config:
         for host in self.trusted_hosts:
             args.extend(["--trusted-host", host])
 
-        # Add timeout
-        args.extend(["--timeout", str(self.timeout)])
+        # Add pip timeout (单个网络请求超时)
+        args.extend(["--timeout", str(self.pip_timeout)])
 
         # Add retries
         args.extend(["--retries", str(self.retries)])
