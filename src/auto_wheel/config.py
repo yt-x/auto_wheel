@@ -19,7 +19,7 @@ class Config:
         "download_dir": "./downloads",
         "pip_timeout": 300,  # pip --timeout: 单个网络请求超时（秒）
         "retries": 3,
-        "use_uv_resolver": False
+        "use_uv_resolver": True
     }
 
     def __init__(self, config_path: Optional[str] = None):
@@ -107,7 +107,7 @@ class Config:
     @property
     def use_uv_resolver(self) -> bool:
         """Whether to enable uv-based dependency resolver"""
-        return bool(self.config_data.get("use_uv_resolver", False))
+        return bool(self.config_data.get("use_uv_resolver", True))
 
     def get_pip_args(self) -> List[str]:
         """

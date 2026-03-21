@@ -59,6 +59,35 @@ class DependencyResolver:
 
         return packages, False, None
 
+    def resolve_from_requirements_file(
+        self,
+        requirements_file: str
+    ) -> Tuple[Optional[List[str]], bool, Optional[str]]:
+        """
+        从原始 requirements 文件解析依赖。
+
+        Returns:
+            resolved: uv 成功时返回解析后的 pinned 列表；否则为 None
+            used_uv: 是否成功使用 uv
+            error: uv 失败或不可用时的提示信息
+        """
+        if not self.use_uv:
+            return None, False, None
+
+        if not shutil.which("uv"):
+            return None, False, "未找到 uv，可选安装 uv 以提升跨版本依赖解析准确性"
+
+        try:
+            resolved = self._resolve_with_uv_requirements_file(requirements_file)
+            return resolved, True, None
+        except subprocess.CalledProcessError as exc:
+            msg = exc.stderr or exc.stdout or str(exc)
+            if self.verbose and msg:
+                print(msg, file=sys.stderr)
+            return None, False, f"uv pip compile 失败，已回退原始 requirements: {msg.strip()}"
+        except Exception as exc:  # pragma: no cover - safety net
+            return None, False, f"uv pip compile 异常，已回退原始 requirements: {exc}"
+
     def _resolve_with_uv(self, packages: List[str]) -> List[str]:
         """Run uv pip compile on package list and return pinned requirements."""
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -67,45 +96,59 @@ class DependencyResolver:
             out_file = tmp_path / "requirements.txt"
 
             in_file.write_text("\n".join(packages), encoding="utf-8")
+            return self._run_uv_compile(in_file, out_file)
 
-            cmd = [
-                "uv",
-                "pip",
-                "compile",
-                str(in_file),
-                "--output-file",
-                str(out_file),
-                "--python-version",
-                self.python_version,
-            ]
+    def _resolve_with_uv_requirements_file(self, requirements_file: str) -> List[str]:
+        """Run uv pip compile on original requirements file and return pinned requirements."""
+        if not requirements_file:
+            raise ValueError("requirements_file is empty")
+        input_file = Path(requirements_file)
+        if not input_file.exists():
+            raise FileNotFoundError(f"Requirements file not found: {requirements_file}")
 
-            if self.platform and self.platform.lower() != "auto":
-                platform = self._convert_platform(self.platform)
-                cmd.extend(["--python-platform", platform])
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_file = Path(tmp_dir) / "requirements.txt"
+            return self._run_uv_compile(input_file, out_file)
 
-            cmd.extend(self._convert_pip_args_for_uv(self.pip_args))
+    def _run_uv_compile(self, input_file: Path, out_file: Path) -> List[str]:
+        """Execute uv pip compile and parse pinned output."""
+        cmd = [
+            "uv",
+            "pip",
+            "compile",
+            str(input_file),
+            "--output-file",
+            str(out_file),
+            "--python-version",
+            self.python_version,
+        ]
 
-            if self.verbose:
-                print("[uv]", " ".join(cmd))
+        if self.platform and self.platform.lower() != "auto":
+            platform = self._convert_platform(self.platform)
+            cmd.extend(["--python-platform", platform])
 
-            subprocess.run(
-                cmd,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
+        cmd.extend(self._convert_pip_args_for_uv(self.pip_args))
 
-            if not out_file.exists():
-                raise RuntimeError("uv pip compile 未生成输出文件")
+        if self.verbose:
+            print("[uv]", " ".join(cmd))
 
-            lines = [line.strip() for line in out_file.read_text(encoding="utf-8").splitlines()]
-            # 过滤注释与空行
-            resolved = [line for line in lines if line and not line.startswith("#")]
-            if not resolved:
-                raise RuntimeError("uv pip compile 输出为空")
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout,
+        )
 
-            return resolved
+        if not out_file.exists():
+            raise RuntimeError("uv pip compile 未生成输出文件")
+
+        lines = [line.strip() for line in out_file.read_text(encoding="utf-8").splitlines()]
+        resolved = [line for line in lines if line and not line.startswith("#")]
+        if not resolved:
+            raise RuntimeError("uv pip compile 输出为空")
+
+        return resolved
 
     @staticmethod
     def _convert_platform(platform: str) -> str:

@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
 )
 
+from ..utils import validate_python_version
 from .workers import DownloadRequest
 
 
@@ -205,6 +206,9 @@ class ParameterForm(QWidget):
         packages = [line.strip() for line in self.packages_edit.toPlainText().splitlines() if line.strip()]
 
         python_version = self.python_version_edit.text().strip() or None
+        if python_version:
+            validate_python_version(python_version)
+
         output_dir = self.output_dir_edit.text().strip() or None
         config_path = self.config_path_edit.text().strip() or None
         platform = self.platform_edit.text().strip() or None

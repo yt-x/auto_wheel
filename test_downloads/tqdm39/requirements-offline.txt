@@ -1,7 +1,0 @@
-# Generated offline requirements file
-# Install with: pip install --no-index --find-links=test_downloads -r requirements-offline.txt
-#
-# Note: This file contains exact versions of all downloaded packages
-
-colorama==0.4.6
-tqdm==4.67.1

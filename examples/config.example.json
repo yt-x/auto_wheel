@@ -7,5 +7,5 @@
   "download_dir": "./downloads",
   "pip_timeout": 300,
   "retries": 3,
-  "use_uv_resolver": false
+  "use_uv_resolver": true
 }

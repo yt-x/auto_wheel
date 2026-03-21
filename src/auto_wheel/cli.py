@@ -6,6 +6,8 @@ import argparse
 from pathlib import Path
 from typing import List, Optional
 
+from .utils import get_python_version_warning, validate_python_version
+
 
 def parse_arguments(args: Optional[List[str]] = None) -> argparse.Namespace:
     """
@@ -145,24 +147,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
 
     # Validate Python version format
     if args.python_version:
-        parts = args.python_version.split(".")
-        if len(parts) < 2:
-            raise ValueError(
-                f"Invalid Python version format: {args.python_version}. "
-                "Expected format: X.Y or X.Y.Z (e.g., 3.9 or 3.9.7)"
-            )
-        try:
-            major, minor = int(parts[0]), int(parts[1])
-            if major < 3 or (major == 3 and minor < 7):
-                print(
-                    f"Warning: Python {args.python_version} is quite old. "
-                    "Some packages may not be available."
-                )
-        except ValueError:
-            raise ValueError(
-                f"Invalid Python version: {args.python_version}. "
-                "Version numbers must be integers."
-            )
+        validate_python_version(args.python_version)
+        warning = get_python_version_warning(args.python_version)
+        if warning:
+            print(warning)
 
     # Validate config file if specified
     if args.config:

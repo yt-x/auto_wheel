@@ -11,8 +11,6 @@ dependencies = [
     "pip>=21.0",
     "packaging>=21.0",
     "tqdm>=4.62.0",
-    "pyqt6>=6.7",
-    "qt-material>=2.14",
 ]
 
 [project.optional-dependencies]
