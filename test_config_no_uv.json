@@ -1,7 +1,0 @@
-{
-    "use_uv_resolver": false,
-    "default_python_version": "3.9",
-    "download_dir": "./test_downloads_no_uv",
-    "timeout": 300,
-    "retries": 3
-}

@@ -3,16 +3,17 @@ Requirements file generation module
 """
 
 import hashlib
-import shutil
+import json
 from pathlib import Path
 from typing import Dict, Optional, Any
+from packaging.utils import canonicalize_name
 from packaging.version import parse as parse_version
 
 
 class RequirementsGenerator:
     """Generate requirements.txt from downloaded packages"""
 
-    def __init__(self, output_dir: str, with_hashes: bool = False):
+    def __init__(self, output_dir: str, with_hashes: bool = False) -> None:
         """
         Initialize requirements generator
 
@@ -23,6 +24,8 @@ class RequirementsGenerator:
         self.output_dir = Path(output_dir)
         self.with_hashes = with_hashes
         self.sources_dir = self.output_dir / "sources"
+        self.source_report_path = self.output_dir / "source-fallback-report.json"
+        self.source_report: Dict[str, Any] = {}
         self.last_summary: Dict[str, Any] = {}
 
     def generate(
@@ -41,6 +44,7 @@ class RequirementsGenerator:
             Path to generated requirements file
         """
         self._prepare_sources_directory()
+        self.source_report = self._load_source_fallback_report()
         wheel_packages = self._get_packages_info()
         source_packages = self._get_source_packages_info()
 
@@ -71,8 +75,14 @@ class RequirementsGenerator:
                     f.write(f"{requirement}\n")
 
         if source_packages:
-            self._write_sources_manifest(source_packages, sources_path)
-            self._write_source_install_guide(source_packages, guide_path, output_file, sources_file)
+            self._write_sources_manifest(source_packages, sources_path, self.source_report)
+            self._write_source_install_guide(
+                source_packages,
+                guide_path,
+                output_file,
+                sources_file,
+                self.source_report,
+            )
         else:
             if sources_path.exists():
                 sources_path.unlink()
@@ -85,21 +95,28 @@ class RequirementsGenerator:
             "source_guide_file": str(guide_path),
             "wheel_count": len(wheel_packages),
             "source_count": len(source_packages),
-            "sources_dir": str(self.sources_dir)
+            "sources_dir": str(self.sources_dir),
+            "source_report_file": str(self.source_report_path),
         }
 
         return str(output_path)
+
+    def _load_source_fallback_report(self) -> Dict[str, Any]:
+        """Load source fallback report if present."""
+        if not self.source_report_path.exists():
+            return {}
+        try:
+            with open(self.source_report_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
 
     def _prepare_sources_directory(self) -> None:
         """
         Move source distributions into a dedicated directory.
         """
         self.sources_dir.mkdir(parents=True, exist_ok=True)
-        for child in self.sources_dir.iterdir():
-            if child.is_file():
-                child.unlink()
-            elif child.is_dir():
-                shutil.rmtree(child)
 
         for pattern in ("*.tar.gz", "*.zip"):
             for sdist_path in self.output_dir.glob(pattern):
@@ -108,18 +125,29 @@ class RequirementsGenerator:
                     target_path.unlink()
                 sdist_path.replace(target_path)
 
-    def _write_sources_manifest(self, source_packages: Dict[str, Dict[str, str]], manifest_path: Path) -> None:
+    def _write_sources_manifest(
+        self,
+        source_packages: Dict[str, Dict[str, str]],
+        manifest_path: Path,
+        source_report: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         Write source package manifest used for manual/offline handling.
         """
+        report_sources = (source_report or {}).get("source_packages") or {}
         with open(manifest_path, 'w', encoding='utf-8') as f:
             f.write("# Source packages that require manual/offline build handling\n")
-            f.write("# Format: package==version  # file:<filename> [sha256:<hash>]\n\n")
+            f.write("# Format: package==version  # file:<filename> [sha256:<hash>] [resolver:<source>] [probe:<status>]\n\n")
             for pkg_name, pkg_info in sorted(source_packages.items()):
                 requirement = f"{pkg_name}=={pkg_info['version']}"
                 suffix = f"  # file:{pkg_info['filename']}"
                 if pkg_info.get('hash'):
                     suffix += f" sha256:{pkg_info['hash']}"
+                pkg_report = report_sources.get(canonicalize_name(pkg_name))
+                if pkg_report and pkg_report.get("dependency_source"):
+                    suffix += f" resolver:{pkg_report['dependency_source']}"
+                probe_status = (pkg_report or {}).get("probe_result") or "no_wheel"
+                suffix += f" probe:{probe_status}"
                 f.write(f"{requirement}{suffix}\n")
 
     def _write_source_install_guide(
@@ -127,11 +155,15 @@ class RequirementsGenerator:
         source_packages: Dict[str, Dict[str, str]],
         guide_path: Path,
         requirements_file: str,
-        sources_file: str
+        sources_file: str,
+        source_report: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Write manual guide for source package offline installation.
         """
+        report_sources = (source_report or {}).get("source_packages") or {}
+        report_warnings = (source_report or {}).get("warnings") or []
+
         lines = [
             "# 源码包离线安装指引",
             "",
@@ -168,6 +200,43 @@ class RequirementsGenerator:
 
         for pkg_name, pkg_info in sorted(source_packages.items()):
             lines.append(f"- {pkg_name}=={pkg_info['version']} ({pkg_info['filename']})")
+
+        lines.extend([
+            "",
+            "## 6. 源码包逐项处理建议",
+        ])
+
+        for pkg_name, pkg_info in sorted(source_packages.items()):
+            pkg_report = report_sources.get(canonicalize_name(pkg_name)) or {}
+            dep_source = pkg_report.get("dependency_source", "unknown")
+            probe_status = pkg_report.get("probe_result", "no_wheel")
+            dependencies = pkg_report.get("dependencies") or []
+            source_dependencies = pkg_report.get("source_dependencies") or []
+            failed_dependencies = pkg_report.get("failed_wheel_dependencies") or []
+
+            lines.append(f"### {pkg_name}=={pkg_info['version']}")
+            lines.append(f"- 源码文件：`sources/{pkg_info['filename']}`")
+            lines.append(f"- 依赖解析来源：`{dep_source}`")
+            lines.append(f"- 探测结论：`{probe_status}`")
+            if dependencies:
+                lines.append(f"- 解析到依赖数量：{len(dependencies)}")
+            else:
+                lines.append("- 解析到依赖数量：0（可直接尝试构建）")
+            if source_dependencies:
+                lines.append(f"- 需要源码处理的依赖：{', '.join(source_dependencies)}")
+            if failed_dependencies:
+                lines.append(f"- wheel 下载失败依赖：{', '.join(failed_dependencies)}")
+            lines.extend([
+                "- 建议命令：",
+                f"  - `python -m pip wheel --no-index --no-deps --wheel-dir=.wheels sources/{pkg_info['filename']}`",
+                f"  - `python -m pip install --no-index --find-links=.wheels {pkg_name}=={pkg_info['version']}`",
+                "",
+            ])
+
+        if report_warnings:
+            lines.append("## 7. 回退过程告警")
+            for warning in report_warnings:
+                lines.append(f"- {warning}")
 
         with open(guide_path, 'w', encoding='utf-8') as f:
             f.write("\n".join(lines) + "\n")

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from ..config import Config
 from ..downloader import WheelDownloader
@@ -74,7 +74,7 @@ class DownloadWorker(QThread):
     finished = pyqtSignal(bool, str)
     started_signal = pyqtSignal()
 
-    def __init__(self, request: DownloadRequest, parent=None) -> None:
+    def __init__(self, request: DownloadRequest, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self.request = request
         self.output_dir: Optional[str] = None
@@ -119,6 +119,7 @@ class DownloadWorker(QThread):
             only_binary=only_binary,
             verbose=req.verbose,
             config_pip_args=config.get_pip_args(),
+            use_uv_resolver=config.use_uv_resolver,
             max_attempts=req.retries,
             retry_delay=3.0,
             command_timeout=command_timeout,
@@ -206,6 +207,14 @@ class DownloadWorker(QThread):
             self._log("wheel-only 下载失败，已自动回退下载源码包。")
             if result.get("fallback_reason"):
                 self._log(f"回退原因：{result['fallback_reason']}")
+            fallback_report = result.get("source_fallback_report") or {}
+            if fallback_report:
+                self._log(
+                    "回退摘要："
+                    f"源码包={fallback_report.get('source_package_count', 0)}，"
+                    f"依赖 wheel={fallback_report.get('wheel_dependency_count', 0)}，"
+                    f"告警={len(fallback_report.get('warnings') or [])}"
+                )
             self._log("请先按 SOURCE_INSTALL_GUIDE.md 处理源码包，再执行离线安装。")
 
         generator = RequirementsGenerator(output_dir=output_dir, with_hashes=req.with_hashes)
