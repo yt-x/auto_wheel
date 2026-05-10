@@ -14,7 +14,14 @@
       "mcp__serena__create_text_file",
       "mcp__serena__replace_content",
       "mcp__open-websearch__search",
-      "mcp__open-websearch__fetchWebContent"
+      "mcp__open-websearch__fetchWebContent",
+      "Bash(git log *)",
+      "Bash(git checkout *)",
+      "Bash(Get-Content src/auto_wheel/downloader.py -Head 5)",
+      "Bash(Select-String -Path *)",
+      "Bash(Measure-Object)",
+      "Bash(Select-Object -ExpandProperty Count)",
+      "Bash(git add *)"
     ],
     "deny": [],
     "ask": []

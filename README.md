@@ -76,7 +76,7 @@ auto-wheel -p 3.9 -r requirements.txt --verify-installability -o ./downloads
 
 ## 配置文件
 
-可以创建 `config.json` 来自定义设置（可参考 `examples/config.example.json`）：
+可以创建 `config.json` 来自定义设置：
 
 ```json
 {
@@ -202,8 +202,26 @@ python -m pip install --no-index --find-links=downloads package_name
   -v, --verbose          详细输出
   --dry-run              模拟运行，不实际下载
   --plan-only            仅解析依赖并生成预览产物（dependency-tree.json/coverage-report.md），不执行下载
-  --approve-tree         指定已确认的 dependency-tree.json 作为确认闸口（配合 --plan-only 使用）
+  --approve-tree         指定已确认的 dependency-tree.json 作为确认闸口（在 --plan-only 生成后使用）
   --verify-installability 下载完成后执行离线可安装性预演并生成 installability-report.md
+```
+
+### 配置示例文件
+
+创建 `config.json`：
+
+```json
+{
+  "index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
+  "trusted_hosts": ["pypi.tuna.tsinghua.edu.cn"],
+  "extra_index_urls": [],
+  "default_python_version": "3.9",
+  "default_platform": "auto",
+  "download_dir": "./downloads",
+  "pip_timeout": 300,
+  "retries": 3,
+  "use_uv_resolver": true
+}
 ```
 
 ## 示例场景

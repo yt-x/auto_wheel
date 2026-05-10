@@ -21,6 +21,9 @@ if "PyQt6" not in sys.modules:
         def __init__(self, parent=None):
             self.parent = parent
 
+    class _DummyQObject:
+        pass
+
     class _DummySignal:
         def __init__(self, *args, **kwargs):
             self.args = args
@@ -32,6 +35,7 @@ if "PyQt6" not in sys.modules:
     def _dummy_pyqt_signal(*args, **kwargs):
         return _DummySignal(*args, **kwargs)
 
+    qtcore_mod.QObject = _DummyQObject
     qtcore_mod.QThread = _DummyQThread
     qtcore_mod.pyqtSignal = _dummy_pyqt_signal
     pyqt6_mod.QtCore = qtcore_mod

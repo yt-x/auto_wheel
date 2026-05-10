@@ -63,7 +63,7 @@ CLI 与 GUI 通过统一的解析状态快照字段输出状态变化，便于�
 - 源码包处理完成后，再执行 `python -m pip install --no-index --find-links=. -r requirements-offline.txt`，保证仅从离线介质安装且不污染全局环境。
 
 ## 5. 开发与调试建议
-1. **本地测试**：`python -m pip install -e .` 安装 CLI 后执行 `auto-wheel -p 3.9 -r examples/example_requirements.txt --dry-run -v` 验证命令拼接。
+1. **本地测试**：`python -m pip install -e .` 安装 CLI 后执行 `auto-wheel -p 3.9 -r requirements.txt --dry-run -v` 验证命令拼接。
 2. **脚本验证**：完成一次真实下载后，先激活 `venv/conda`，再进入 `downloads/` 执行 `./install.sh` 或 `install.bat`；若存在源码包，应先验证阻断提示，再按 `SOURCE_INSTALL_GUIDE.md` 完成处理后复测。
 3. **日志采集**：当前项目未内置日志文件，可在上层调用 `WheelDownloader` 结果返回值中的 `errors` 字段记录到自定义日志或 evidence。
 4. **扩展点**：如需更细粒度的 retry/backoff 策略或额外配置字段，直接在 `Config.DEFAULT_CONFIG` 增加键并在 `WheelDownloader` 初始化传入即可。
