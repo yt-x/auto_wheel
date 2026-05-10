@@ -1,6 +1,6 @@
 .*/
 
-# Python
+# Python 运行时与构建产物
 __pycache__/
 *.py[cod]
 *$py.class
@@ -9,7 +9,6 @@ __pycache__/
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
 .eggs/
 lib/
@@ -22,34 +21,45 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# Python 下载与离线包产物
+downloads/
+*.whl
+*.tar.gz
+
+# 虚拟环境
 venv/
 .venv/
 env/
 ENV/
 
-# IDE
+# 编辑器与临时文件
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Downloaded packages
-downloads/
-*.whl
-*.tar.gz
-
-# Config
-config.json
-
-# OS
+# 操作系统文件
 .DS_Store
 Thumbs.db
 
-# AI
+# 项目本地配置
+config.json
+
+# AI / Agent 运行工件与文档
 AGENTS.md
 .serena/
 .claude
+.codex/
 evidence/
 docs/
+openspec/
+research-results.tsv
+research-results.prev.tsv
+autoresearch-state.json
+autoresearch-state.prev.json
+autoresearch-lessons.md
+autoresearch-hook-context.json
+autoresearch-launch.json
+autoresearch-runtime.json
+autoresearch-runtime.log

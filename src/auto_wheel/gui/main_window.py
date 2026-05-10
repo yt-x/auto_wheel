@@ -10,6 +10,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
+    QApplication,
     QMainWindow,
     QSplitter,
     QWidget,
@@ -33,7 +34,7 @@ class MainWindow(QMainWindow):
     Auto Wheel GUI 主窗口。
     """
 
-    def __init__(self, initial_theme: str, qt_app, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, initial_theme: str, qt_app: QApplication, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.qt_app = qt_app
         self.current_theme = initial_theme

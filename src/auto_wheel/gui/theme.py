@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from PyQt6.QtWidgets import QApplication
 
 THEME_CONFIG_PATH = Path.home() / ".auto_wheel_gui.json"
 THEME_KEY = "theme"
@@ -55,7 +58,7 @@ def save_theme_preference(theme_key: str) -> None:
         pass
 
 
-def apply_theme(app, theme_key: str) -> None:
+def apply_theme(app: QApplication, theme_key: str) -> None:
     """
     对 QApplication 应用指定主题，若 qt-material 缺失则静默忽略。
     """

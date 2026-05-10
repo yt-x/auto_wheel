@@ -5,6 +5,7 @@ Main entry point for auto-wheel
 import sys
 import json
 from pathlib import Path
+from typing import Any, Dict, List
 
 from .cli import parse_arguments, validate_arguments
 from .config import Config
@@ -14,9 +15,9 @@ from .resolver import DependencyResolver
 from .utils import get_python_version_warning, validate_python_version, load_requirements
 
 
-def _summarize_stage_errors(errors):
+def _summarize_stage_errors(errors: List[Dict[str, Any]]) -> Dict[str, str]:
     """Build compact per-stage error summary for CLI output."""
-    stage_summary = {}
+    stage_summary: Dict[str, str] = {}
     for err in errors or []:
         stage = err.get("stage") or "unknown"
         detail = (err.get("stderr") or err.get("stdout") or err.get("message") or "").strip()
@@ -139,6 +140,7 @@ def main():
             only_binary=args.only_binary,
             verbose=args.verbose,
             config_pip_args=config.get_pip_args(),
+            use_uv_resolver=config.use_uv_resolver,
             max_attempts=max(1, config.retries),
             retry_delay=3.0,
             # command_timeout: 整体 pip download 命令的超时（秒），最小 60
@@ -267,6 +269,14 @@ def main():
             print("Notice: wheel-only download failed, source fallback succeeded.")
             if result.get("fallback_reason"):
                 print(f"  Reason: {result['fallback_reason']}")
+            fallback_report = result.get("source_fallback_report") or {}
+            if fallback_report:
+                print(
+                    "  Source fallback summary:"
+                    f" source_packages={fallback_report.get('source_package_count', 0)},"
+                    f" wheel_dependencies={fallback_report.get('wheel_dependency_count', 0)},"
+                    f" warnings={len(fallback_report.get('warnings') or [])}"
+                )
             print("  Please process SOURCE_INSTALL_GUIDE.md before offline installation.")
 
         # Generate requirements file

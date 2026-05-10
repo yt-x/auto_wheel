@@ -22,7 +22,7 @@ class Config:
         "use_uv_resolver": True
     }
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None) -> None:
         """
         Initialize configuration
 
