@@ -1,19 +1,41 @@
 """
-Dependency resolution module using optional uv pip compile.
+依赖解析模块（默认 uv，必要时回退 pip 语义）。
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+
+from .state_model import JobState, ResolutionStateSnapshot
 
 
 class DependencyResolver:
-    """Resolve packages into pinned requirements for target Python/version/platform."""
+    """将输入依赖解析为目标环境可用的 pinned requirements。"""
+
+    _UNSAT_PATTERNS = (
+        r"no solution found when resolving dependencies",
+        r"unsatisfiable",
+        r"has no wheels with a matching python abi tag",
+        r"could not find a version that satisfies the requirement",
+        r"no matching distribution found",
+    )
+
+    _DIRECT_PLATFORM_MAP: Dict[str, str] = {
+        "win_amd64": "x86_64-pc-windows-msvc",
+        "win32": "i686-pc-windows-msvc",
+        "manylinux2014_x86_64": "x86_64-manylinux2014",
+        "manylinux2014_aarch64": "aarch64-manylinux2014",
+        "manylinux_2_17_x86_64": "x86_64-manylinux_2_17",
+        "manylinux_2_17_aarch64": "aarch64-manylinux_2_17",
+        "macosx_10_9_x86_64": "x86_64-apple-darwin",
+        "macosx_11_0_arm64": "aarch64-apple-darwin",
+    }
 
     def __init__(
         self,
@@ -30,66 +52,182 @@ class DependencyResolver:
         self.use_uv = use_uv
         self.timeout = timeout if timeout and timeout > 0 else None
         self.verbose = verbose
+        normalized_platform = self._convert_platform(platform) if platform and platform.lower() != "auto" else None
+        self.last_resolution_state = ResolutionStateSnapshot(
+            job_state=JobState.CREATED,
+            stage="resolver_init",
+            resolver="none",
+            reason="resolver initialized",
+            target_platform=platform,
+            normalized_platform=normalized_platform,
+        )
+
+    def get_last_resolution_state(self) -> Dict[str, str]:
+        """获取最近一次解析状态快照。"""
+        return self.last_resolution_state.to_dict()
+
+    def _set_resolution_state(
+        self,
+        *,
+        job_state: JobState,
+        stage: str,
+        resolver: str,
+        failure_kind: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        normalized_platform = self._convert_platform(self.platform) if self.platform and self.platform.lower() != "auto" else None
+        self.last_resolution_state = ResolutionStateSnapshot(
+            job_state=job_state,
+            stage=stage,
+            resolver=resolver,
+            failure_kind=failure_kind,
+            reason=reason,
+            target_platform=self.platform,
+            normalized_platform=normalized_platform,
+        )
 
     def resolve(self, packages: List[str]) -> Tuple[List[str], bool, Optional[str]]:
-        """Resolve dependency list.
-
-        Returns:
-            pinned_reqs: resolved requirement lines (may be the original list on fallback)
-            used_uv: whether uv was used
-            error: optional error message when uv failed
-        """
+        """解析包列表。返回 (resolved_packages, used_uv, warning)。"""
         if not packages:
+            self._set_resolution_state(
+                job_state=JobState.PLANNING_READY,
+                stage="resolver_empty_input",
+                resolver="none",
+                reason="no packages provided",
+            )
             return [], False, None
 
         if self.use_uv and shutil.which("uv"):
+            self._set_resolution_state(
+                job_state=JobState.RESOLVING_UV,
+                stage="uv_compile",
+                resolver="uv",
+                reason="starting uv pip compile",
+            )
             try:
                 resolved = self._resolve_with_uv(packages)
+                self._set_resolution_state(
+                    job_state=JobState.PLANNING_READY,
+                    stage="uv_compile",
+                    resolver="uv",
+                    reason="uv compile succeeded",
+                )
                 return resolved, True, None
-            except subprocess.CalledProcessError as exc:  # uv failed
-                msg = exc.stderr or exc.stdout or str(exc)
-                if self.verbose and msg:
-                    print(msg, file=sys.stderr)
-                return packages, False, f"uv pip compile 失败，已回退原始列表: {msg.strip()}"
-            except Exception as exc:  # pragma: no cover - safety net
+            except subprocess.CalledProcessError as exc:
+                warning = self._build_uv_failure_message(exc, is_requirements_file=False)
+                return packages, False, warning
+            except Exception as exc:  # pragma: no cover - 兜底
+                self._set_resolution_state(
+                    job_state=JobState.RESOLVING_PIP_FALLBACK,
+                    stage="uv_compile",
+                    resolver="pip",
+                    failure_kind="tool_error",
+                    reason=str(exc),
+                )
                 return packages, False, f"uv pip compile 异常，已回退原始列表: {exc}"
 
         if self.use_uv and not shutil.which("uv"):
-            return packages, False, "未找到 uv，可选安装 uv 以提升跨版本依赖解析准确性"
+            reason = "未找到 uv，可选安装 uv 以提升跨版本依赖解析准确性"
+            self._set_resolution_state(
+                job_state=JobState.RESOLVING_PIP_FALLBACK,
+                stage="uv_unavailable",
+                resolver="pip",
+                failure_kind="tool_error",
+                reason=reason,
+            )
+            return packages, False, reason
 
+        self._set_resolution_state(
+            job_state=JobState.PLANNING_READY,
+            stage="pip_direct",
+            resolver="pip",
+            reason="uv disabled by configuration",
+        )
         return packages, False, None
 
     def resolve_from_requirements_file(
         self,
         requirements_file: str
     ) -> Tuple[Optional[List[str]], bool, Optional[str]]:
-        """
-        从原始 requirements 文件解析依赖。
-
-        Returns:
-            resolved: uv 成功时返回解析后的 pinned 列表；否则为 None
-            used_uv: 是否成功使用 uv
-            error: uv 失败或不可用时的提示信息
-        """
+        """从 requirements 文件解析依赖。返回 (resolved_packages, used_uv, warning)。"""
         if not self.use_uv:
+            self._set_resolution_state(
+                job_state=JobState.PLANNING_READY,
+                stage="pip_direct_requirements",
+                resolver="pip",
+                reason="uv disabled by configuration",
+            )
             return None, False, None
 
         if not shutil.which("uv"):
-            return None, False, "未找到 uv，可选安装 uv 以提升跨版本依赖解析准确性"
+            reason = "未找到 uv，可选安装 uv 以提升跨版本依赖解析准确性"
+            self._set_resolution_state(
+                job_state=JobState.RESOLVING_PIP_FALLBACK,
+                stage="uv_unavailable",
+                resolver="pip",
+                failure_kind="tool_error",
+                reason=reason,
+            )
+            return None, False, reason
 
+        self._set_resolution_state(
+            job_state=JobState.RESOLVING_UV,
+            stage="uv_compile_requirements",
+            resolver="uv",
+            reason="starting uv compile with requirements file",
+        )
         try:
             resolved = self._resolve_with_uv_requirements_file(requirements_file)
+            self._set_resolution_state(
+                job_state=JobState.PLANNING_READY,
+                stage="uv_compile_requirements",
+                resolver="uv",
+                reason="uv compile succeeded",
+            )
             return resolved, True, None
         except subprocess.CalledProcessError as exc:
-            msg = exc.stderr or exc.stdout or str(exc)
-            if self.verbose and msg:
-                print(msg, file=sys.stderr)
-            return None, False, f"uv pip compile 失败，已回退原始 requirements: {msg.strip()}"
-        except Exception as exc:  # pragma: no cover - safety net
+            warning = self._build_uv_failure_message(exc, is_requirements_file=True)
+            return None, False, warning
+        except Exception as exc:  # pragma: no cover - 兜底
+            self._set_resolution_state(
+                job_state=JobState.RESOLVING_PIP_FALLBACK,
+                stage="uv_compile_requirements",
+                resolver="pip",
+                failure_kind="tool_error",
+                reason=str(exc),
+            )
             return None, False, f"uv pip compile 异常，已回退原始 requirements: {exc}"
 
+    def _build_uv_failure_message(self, exc: subprocess.CalledProcessError, is_requirements_file: bool) -> str:
+        output = ((exc.stderr or "") + "\n" + (exc.stdout or "")).strip()
+        failure_kind = self._classify_uv_failure(output)
+        fallback_target = "原始 requirements" if is_requirements_file else "原始列表"
+        if failure_kind == "unsatisfiable":
+            message = f"uv 判定依赖在目标环境不可满足，已回退 {fallback_target}: {output}"
+        else:
+            message = f"uv pip compile 失败，已回退 {fallback_target}: {output}"
+
+        self._set_resolution_state(
+            job_state=JobState.RESOLVING_PIP_FALLBACK,
+            stage="uv_compile",
+            resolver="pip",
+            failure_kind=failure_kind,
+            reason=output or f"uv exited with code {exc.returncode}",
+        )
+        if self.verbose and output:
+            print(output, file=sys.stderr)
+        return message.strip()
+
+    def _classify_uv_failure(self, output: str) -> str:
+        """识别 uv 失败类型：unsatisfiable 或 tool_error。"""
+        lowered = output.lower()
+        for pattern in self._UNSAT_PATTERNS:
+            if re.search(pattern, lowered):
+                return "unsatisfiable"
+        return "tool_error"
+
     def _resolve_with_uv(self, packages: List[str]) -> List[str]:
-        """Run uv pip compile on package list and return pinned requirements."""
+        """对 package 列表执行 uv pip compile。"""
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             in_file = tmp_path / "requirements.in"
@@ -99,7 +237,7 @@ class DependencyResolver:
             return self._run_uv_compile(in_file, out_file)
 
     def _resolve_with_uv_requirements_file(self, requirements_file: str) -> List[str]:
-        """Run uv pip compile on original requirements file and return pinned requirements."""
+        """对 requirements 文件执行 uv pip compile。"""
         if not requirements_file:
             raise ValueError("requirements_file is empty")
         input_file = Path(requirements_file)
@@ -111,7 +249,7 @@ class DependencyResolver:
             return self._run_uv_compile(input_file, out_file)
 
     def _run_uv_compile(self, input_file: Path, out_file: Path) -> List[str]:
-        """Execute uv pip compile and parse pinned output."""
+        """执行 uv pip compile 并读取解析结果。"""
         cmd = [
             "uv",
             "pip",
@@ -137,6 +275,8 @@ class DependencyResolver:
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=self.timeout,
         )
 
@@ -150,29 +290,49 @@ class DependencyResolver:
 
         return resolved
 
-    @staticmethod
-    def _convert_platform(platform: str) -> str:
-        """
-        Convert pip-style platform identifier to uv-style.
+    @classmethod
+    def _convert_platform(cls, platform: str) -> str:
+        """将 pip 平台标识转换为 uv 目标平台。"""
+        platform_lower = platform.lower().strip()
+        if platform_lower in cls._DIRECT_PLATFORM_MAP:
+            return cls._DIRECT_PLATFORM_MAP[platform_lower]
 
-        pip: win_amd64, manylinux2014_x86_64, macosx_10_9_x86_64
-        uv:  windows, linux, macos
-        """
-        platform_lower = platform.lower()
+        manylinux_match = re.match(r"manylinux(?:_|\d+_)?(\d+)?[_]?(\d+)?[_-](x86_64|aarch64)", platform_lower)
+        if manylinux_match:
+            arch = manylinux_match.group(3)
+            if "2014" in platform_lower:
+                return f"{arch}-manylinux2014"
+            version_part = re.search(r"manylinux[_]?(\d+)_(\d+)", platform_lower)
+            if version_part:
+                return f"{arch}-manylinux_{version_part.group(1)}_{version_part.group(2)}"
+            return f"{arch}-unknown-linux-gnu"
 
         if "win" in platform_lower:
+            if "amd64" in platform_lower or "x86_64" in platform_lower:
+                return "x86_64-pc-windows-msvc"
+            if "win32" in platform_lower or "i686" in platform_lower or "x86" in platform_lower:
+                return "i686-pc-windows-msvc"
             return "windows"
-        elif "linux" in platform_lower or "manylinux" in platform_lower:
+
+        if "linux" in platform_lower:
+            if "aarch64" in platform_lower or "arm64" in platform_lower:
+                return "aarch64-unknown-linux-gnu"
+            if "x86_64" in platform_lower or "amd64" in platform_lower:
+                return "x86_64-unknown-linux-gnu"
             return "linux"
-        elif "macos" in platform_lower or "darwin" in platform_lower:
+
+        if "macosx" in platform_lower or "darwin" in platform_lower or "macos" in platform_lower:
+            if "arm64" in platform_lower or "aarch64" in platform_lower:
+                return "aarch64-apple-darwin"
+            if "x86_64" in platform_lower or "amd64" in platform_lower:
+                return "x86_64-apple-darwin"
             return "macos"
 
-        # Return original value (might be target triple)
         return platform
 
     @staticmethod
     def _convert_pip_args_for_uv(pip_args: List[str]) -> List[str]:
-        """Convert pip-style args (index, extra-index, trusted-host) for uv."""
+        """将 pip 参数转换为 uv 兼容参数。"""
         uv_args: List[str] = []
         i = 0
         while i < len(pip_args):
@@ -183,8 +343,8 @@ class DependencyResolver:
             elif arg == "--extra-index-url" and i + 1 < len(pip_args):
                 uv_args.extend(["--extra-index-url", pip_args[i + 1]])
                 i += 2
-            elif arg == "--trusted-host":
-                # uv 不需要 trusted-host，跳过 host 值
+            elif arg == "--trusted-host" and i + 1 < len(pip_args):
+                uv_args.extend(["--allow-insecure-host", pip_args[i + 1]])
                 i += 2
             else:
                 i += 1

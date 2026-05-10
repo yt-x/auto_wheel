@@ -18,7 +18,7 @@
    - `-pkg` 输入在 uv 成功时下载 pinned 结果，失败或不可用时回退原始包列表。
 4. `WheelDownloader` 组装 `python -m pip download ...` 命令，并按两阶段执行：
    - **阶段一（wheel-only）**：保留 `--only-binary`，执行最多 `config.retries` 次（至少一次）。
-   - **阶段二（source fallback）**：仅当阶段一失败且识别为“无匹配发行版/无可用版本”时触发；移除 `--only-binary` 后再次执行重试策略。
+   - **阶段二（source fallback）**：仅当阶段一失败且识别为“无匹配发行版/无可用版本”时触发；优先尝试直连采集 sdist，随后使用 source-only + `--no-deps` 回退命令，在目标约束下再次执行重试策略。
    - **结果标记**：返回 `used_source_fallback` 与 `fallback_reason`，供 CLI/GUI 输出统一提示。
    - 重试细节：
     - **命令级超时**：每次调用受 `max(config.pip_timeout, 60)` 秒整体限制，防止 pip 卡死。
@@ -26,6 +26,18 @@
     - **错误归类**：对 `TimeoutExpired`、`CalledProcessError`、`OSError` 打印结构化说明并保存在结果字典，方便上层提示或记日志。
 5. 成功后 `RequirementsGenerator` 扫描 `downloads/`：wheel 进入 `requirements-offline.txt`，源码包分流至 `sources/` 并写入 `sources-offline.txt`，同时生成 `SOURCE_INSTALL_GUIDE.md`。
 6. `generate_install_script()` 为 Linux/macOS 输出 `install.sh`、为 Windows 输出 `install.bat`：两者都只接受已激活虚拟环境（`$VIRTUAL_ENV`/`$CONDA_PREFIX` 或 `%VIRTUAL_ENV%`/`%CONDA_PREFIX%`）中的 Python；若检测到未处理源码包清单，会先阻断并提示按指引处理，避免半安装状态。
+7. 可选高级流程：
+   - `--plan-only`：仅输出依赖树预览与覆盖报告，不执行下载。
+   - `--approve-tree <path>`：启用确认闸口，要求依赖树确认文件与当前目标参数一致。
+   - `--verify-installability`：下载后执行离线可安装性预演并生成 `installability-report.md`。
+
+## 2.1 状态模型（新增）
+
+- **任务级状态（JobState）**：`created` / `resolving_uv` / `resolving_pip_fallback` / `planning_ready` / `downloading` / `verifying_installability` / `completed` / `completed_with_risks` / `failed`
+- **依赖级状态（DependencyState）**：`pending` / `resolved` / `wheel_ready` / `source_required` / `manual_required` / `unresolved`
+- **产物级状态（ArtifactState）**：`missing` / `generated` / `validated` / `invalid`
+
+CLI 与 GUI 通过统一的解析状态快照字段输出状态变化，便于审计与回归测试。
 
 > **提示**：CLI 的 `--dry-run` 仍仅构建命令，不触发下载逻辑；若需要进一步调试，可结合 `-v` 查看每次尝试与等待周期。
 

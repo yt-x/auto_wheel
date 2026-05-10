@@ -3,10 +3,14 @@ Package download module
 """
 
 import re
+import json
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -26,7 +30,8 @@ class WheelDownloader:
         config_pip_args: Optional[List[str]] = None,
         max_attempts: int = 3,
         retry_delay: float = 3.0,
-        command_timeout: Optional[int] = None
+        command_timeout: Optional[int] = None,
+        enable_direct_sdist_fetch: bool = True,
     ):
         """
         Initialize downloader
@@ -43,6 +48,7 @@ class WheelDownloader:
             max_attempts: Maximum times to invoke pip download when failures occur
             retry_delay: Seconds to wait between attempts (linear backoff)
             command_timeout: Overall timeout (seconds) for each pip invocation
+            enable_direct_sdist_fetch: Whether to fetch sdist directly from index API on fallback
         """
         self.python_version = python_version
         self.output_dir = Path(output_dir)
@@ -55,6 +61,7 @@ class WheelDownloader:
         self.max_attempts = max(1, max_attempts)
         self.retry_delay = max(0.0, retry_delay)
         self.command_timeout = command_timeout if command_timeout and command_timeout > 0 else None
+        self.enable_direct_sdist_fetch = bool(enable_direct_sdist_fetch)
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -126,28 +133,86 @@ class WheelDownloader:
             idx += 1
         return filtered
 
-    @staticmethod
-    def _remove_target_constraints(cmd: List[str]) -> List[str]:
-        """Return a copy of command without target interpreter/platform constraints."""
-        filtered: List[str] = []
-        constraint_flags = {"--python-version", "--platform", "--implementation", "--abi"}
-        idx = 0
-        while idx < len(cmd):
-            token = cmd[idx]
-            if token in constraint_flags:
-                idx += 2
-                continue
-            filtered.append(token)
-            idx += 1
-        return filtered
-
     def _build_source_fallback_command(self, cmd: List[str], source_fallback_no_deps: bool) -> List[str]:
-        """Build fallback command that allows sdist download under pip constraints."""
-        without_only_binary = self._remove_only_binary(cmd)
-        fallback_cmd = self._remove_target_constraints(without_only_binary)
-        if source_fallback_no_deps and "--no-deps" not in fallback_cmd:
+        """Build fallback command that keeps target constraints and only allows sdist."""
+        fallback_cmd = self._remove_only_binary(cmd)
+        if "--no-binary" not in fallback_cmd:
+            fallback_cmd.extend(["--no-binary", ":all:"])
+        if "--only-binary" in fallback_cmd:
+            fallback_cmd = self._remove_only_binary(fallback_cmd)
+        # 当使用目标解释器约束时，pip 要求 --no-deps 或 only-binary。这里固定启用 --no-deps。
+        if "--no-deps" not in fallback_cmd:
             fallback_cmd.append("--no-deps")
         return fallback_cmd
+
+    @staticmethod
+    def _load_requirements_file(requirements_file: str) -> List[str]:
+        """Load requirement lines and skip comments/blank lines."""
+        requirements: List[str] = []
+        req_path = Path(requirements_file)
+        if not req_path.exists():
+            return requirements
+        with open(req_path, "r", encoding="utf-8") as file_obj:
+            for raw_line in file_obj:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                requirements.append(line)
+        return requirements
+
+    @staticmethod
+    def _parse_exact_requirement(requirement: str) -> Optional[Tuple[str, str]]:
+        """Parse `name==version` requirement."""
+        line = requirement.strip().split(";", 1)[0].strip()
+        if "==" not in line:
+            return None
+        name, version = line.split("==", 1)
+        name = name.strip()
+        version = version.strip()
+        if not name or not version:
+            return None
+        return name, version
+
+    def _attempt_direct_sdist_fetch(self, source_requirements: List[str]) -> Dict[str, Any]:
+        """
+        Try to fetch sdist artifacts directly from PyPI JSON API.
+
+        This reduces dependency on local build metadata execution for legacy packages.
+        """
+        if not source_requirements:
+            return {"success": False, "fetched": [], "failed": []}
+
+        fetched: List[str] = []
+        failed: List[str] = []
+        for requirement in source_requirements:
+            parsed = self._parse_exact_requirement(requirement)
+            if not parsed:
+                failed.append(requirement)
+                continue
+            package_name, package_version = parsed
+            api_url = f"https://pypi.org/pypi/{package_name}/{package_version}/json"
+            try:
+                with urllib.request.urlopen(api_url, timeout=self.command_timeout or 60) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                urls = payload.get("urls") or []
+                sdist_items = [item for item in urls if item.get("packagetype") == "sdist" and item.get("url")]
+                if not sdist_items:
+                    failed.append(requirement)
+                    continue
+
+                sdist_url = sdist_items[0]["url"]
+                filename = Path(urllib.parse.urlparse(sdist_url).path).name
+                destination = self.output_dir / filename
+                urllib.request.urlretrieve(sdist_url, str(destination))
+                fetched.append(requirement)
+            except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError, ValueError):
+                failed.append(requirement)
+
+        return {
+            "success": bool(fetched) and not failed,
+            "fetched": fetched,
+            "failed": failed,
+        }
 
     @staticmethod
     def _extract_stage_hint(errors: List[Dict[str, Any]]) -> Optional[str]:
@@ -293,7 +358,13 @@ class WheelDownloader:
             Dictionary with download results
         """
         cmd = self._build_pip_command(["-r", requirements_file], dry_run=dry_run)
-        return self._execute_download(cmd, dry_run=dry_run, source_fallback_no_deps=False)
+        source_requirements = self._load_requirements_file(requirements_file)
+        return self._execute_download(
+            cmd,
+            dry_run=dry_run,
+            source_fallback_no_deps=False,
+            source_requirements=source_requirements,
+        )
 
     def download_resolved_requirements(
         self,
@@ -320,7 +391,12 @@ class WheelDownloader:
 
         try:
             cmd = self._build_pip_command(["-r", temp_path], dry_run=dry_run)
-            return self._execute_download(cmd, dry_run=dry_run, source_fallback_no_deps=True)
+            return self._execute_download(
+                cmd,
+                dry_run=dry_run,
+                source_fallback_no_deps=True,
+                source_requirements=resolved_packages,
+            )
         finally:
             try:
                 Path(temp_path).unlink(missing_ok=True)
@@ -343,13 +419,19 @@ class WheelDownloader:
             Dictionary with download results
         """
         cmd = self._build_pip_command(packages, dry_run=dry_run)
-        return self._execute_download(cmd, dry_run=dry_run, source_fallback_no_deps=False)
+        return self._execute_download(
+            cmd,
+            dry_run=dry_run,
+            source_fallback_no_deps=False,
+            source_requirements=packages,
+        )
 
     def _execute_download(
         self,
         cmd: List[str],
         dry_run: bool = False,
-        source_fallback_no_deps: bool = False
+        source_fallback_no_deps: bool = False,
+        source_requirements: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Execute pip download command
@@ -391,6 +473,24 @@ class WheelDownloader:
             fallback_reason = self._detect_no_wheel_reason(wheel_stage_result.get("errors", []))
 
         if fallback_reason:
+            direct_fetch_result = {"success": False, "fetched": [], "failed": []}
+            if self.enable_direct_sdist_fetch:
+                direct_fetch_result = self._attempt_direct_sdist_fetch(source_requirements or [])
+            if direct_fetch_result.get("success"):
+                direct_output = (
+                    "source_fallback_direct: successfully fetched sdist artifacts for "
+                    + ", ".join(direct_fetch_result.get("fetched", []))
+                )
+                return {
+                    "success": True,
+                    "output": direct_output,
+                    "downloaded_to": str(self.output_dir),
+                    "attempts": wheel_stage_result.get("attempts", 1),
+                    "errors": wheel_stage_result.get("errors", []),
+                    "used_source_fallback": True,
+                    "fallback_reason": fallback_reason
+                }
+
             fallback_cmd = self._build_source_fallback_command(
                 cmd,
                 source_fallback_no_deps=source_fallback_no_deps
@@ -398,7 +498,7 @@ class WheelDownloader:
             if self.verbose:
                 print(
                     f"[source_fallback] Triggered because: {fallback_reason}. "
-                    "Retrying without --only-binary and target constraints..."
+                    "Retrying with source-only strategy under target constraints..."
                 )
                 print(f"[source_fallback] Command: {' '.join(fallback_cmd)}")
 

@@ -39,6 +39,18 @@ Examples:
 
     # Use custom config file
     auto-wheel -p 3.9 -r requirements.txt -c config.json
+
+    # Preview dependencies without downloading
+    auto-wheel -p 3.9 -pkg requests==2.31.0 --plan-only -o ./preview
+
+    # Download with confirmed dependency tree
+    auto-wheel -p 3.9 -pkg requests==2.31.0 --approve-tree ./preview/dependency-tree.json
+
+    # Generate requirements with hash verification
+    auto-wheel -p 3.9 -r requirements.txt --with-hashes
+
+    # Verify offline installability after download
+    auto-wheel -p 3.9 -r requirements.txt --verify-installability
         """,
     )
 
@@ -104,12 +116,12 @@ Examples:
         help="Generate requirements.txt with package hashes for secure installation",
     )
 
-    # Only binary (no source distributions)
+    # Only binary (wheel-first with automatic source fallback)
     parser.add_argument(
         "--only-binary",
         type=str,
         default=":all:",
-        help="Only download binary wheels, no source distributions (default: :all:)",
+        help="Prefer binary wheels (default: :all:). Falls back to source distributions when no wheels are available",
     )
 
     # Verbose output
@@ -122,6 +134,24 @@ Examples:
         "--dry-run",
         action="store_true",
         help="Show what would be downloaded without actually downloading",
+    )
+
+    parser.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Only resolve dependencies and generate preview artifacts (dependency-tree.json, coverage-report.md) without downloading",
+    )
+
+    parser.add_argument(
+        "--approve-tree",
+        type=str,
+        help="Path to approved dependency-tree.json for confirmation gate (use after --plan-only)",
+    )
+
+    parser.add_argument(
+        "--verify-installability",
+        action="store_true",
+        help="Run offline installability verification after download and generate installability-report.md",
     )
 
     return parser.parse_args(args)
@@ -159,3 +189,13 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise ValueError(f"Config file not found: {args.config}")
         if not config_path.is_file():
             raise ValueError(f"Not a file: {args.config}")
+
+    if args.plan_only and args.approve_tree:
+        raise ValueError("--plan-only 与 --approve-tree 不能同时使用")
+
+    if args.approve_tree:
+        approve_path = Path(args.approve_tree)
+        if not approve_path.exists():
+            raise ValueError(f"Approved dependency tree file not found: {args.approve_tree}")
+        if not approve_path.is_file():
+            raise ValueError(f"Not a file: {args.approve_tree}")

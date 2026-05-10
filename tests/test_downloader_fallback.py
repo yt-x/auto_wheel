@@ -17,6 +17,7 @@ class WheelDownloaderFallbackTests(unittest.TestCase):
             max_attempts=1,
             retry_delay=0.0,
             command_timeout=60,
+            enable_direct_sdist_fetch=False,
         )
 
     def test_wheel_only_success_without_fallback(self):
@@ -61,9 +62,11 @@ class WheelDownloaderFallbackTests(unittest.TestCase):
         second_cmd = mocked_run.call_args_list[1][0][0]
         self.assertIn("--only-binary", first_cmd)
         self.assertNotIn("--only-binary", second_cmd)
-        self.assertNotIn("--python-version", second_cmd)
-        self.assertNotIn("--implementation", second_cmd)
-        self.assertNotIn("--abi", second_cmd)
+        self.assertIn("--python-version", second_cmd)
+        self.assertIn("--implementation", second_cmd)
+        self.assertIn("--abi", second_cmd)
+        self.assertIn("--no-binary", second_cmd)
+        self.assertIn("--no-deps", second_cmd)
 
     def test_source_fallback_command_removes_target_constraints(self):
         cmd = [
@@ -78,12 +81,13 @@ class WheelDownloaderFallbackTests(unittest.TestCase):
         ]
         fallback_cmd = self.downloader._build_source_fallback_command(cmd, source_fallback_no_deps=False)
         self.assertNotIn("--only-binary", fallback_cmd)
-        self.assertNotIn("--python-version", fallback_cmd)
-        self.assertNotIn("--platform", fallback_cmd)
-        self.assertNotIn("--implementation", fallback_cmd)
-        self.assertNotIn("--abi", fallback_cmd)
+        self.assertIn("--python-version", fallback_cmd)
+        self.assertIn("--platform", fallback_cmd)
+        self.assertIn("--implementation", fallback_cmd)
+        self.assertIn("--abi", fallback_cmd)
+        self.assertIn("--no-binary", fallback_cmd)
         self.assertIn("-r", fallback_cmd)
-        self.assertNotIn("--no-deps", fallback_cmd)
+        self.assertIn("--no-deps", fallback_cmd)
 
     def test_resolved_requirements_fallback_adds_no_deps(self):
         no_wheel = subprocess.CalledProcessError(
@@ -106,6 +110,34 @@ class WheelDownloaderFallbackTests(unittest.TestCase):
         self.assertEqual(mocked_run.call_count, 2)
         second_cmd = mocked_run.call_args_list[1][0][0]
         self.assertIn("--no-deps", second_cmd)
+
+    def test_direct_sdist_fetch_success_skips_second_stage_pip(self):
+        direct_fetch_downloader = WheelDownloader(
+            python_version="3.9",
+            output_dir=self.temp_dir.name,
+            only_binary=":all:",
+            max_attempts=1,
+            retry_delay=0.0,
+            command_timeout=60,
+            enable_direct_sdist_fetch=True,
+        )
+        no_wheel = subprocess.CalledProcessError(
+            returncode=1,
+            cmd=["python", "-m", "pip", "download"],
+            output="",
+            stderr="ERROR: No matching distribution found for demo==1.0.0",
+        )
+        with patch("auto_wheel.downloader.subprocess.run", side_effect=[no_wheel]) as mocked_run:
+            with patch.object(
+                direct_fetch_downloader,
+                "_attempt_direct_sdist_fetch",
+                return_value={"success": True, "fetched": ["demo==1.0.0"], "failed": []},
+            ):
+                result = direct_fetch_downloader.download_packages(["demo==1.0.0"])
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["used_source_fallback"])
+        self.assertEqual(mocked_run.call_count, 1)
 
     def test_non_no_wheel_error_should_not_trigger_fallback(self):
         network_error = subprocess.CalledProcessError(

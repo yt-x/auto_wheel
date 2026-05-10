@@ -3,10 +3,16 @@ Requirements file generation module
 """
 
 import hashlib
+import json
 import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List, Tuple
 from packaging.version import parse as parse_version
+
+from .state_model import DependencyState
 
 
 class RequirementsGenerator:
@@ -25,11 +31,100 @@ class RequirementsGenerator:
         self.sources_dir = self.output_dir / "sources"
         self.last_summary: Dict[str, Any] = {}
 
+    def generate_dependency_preview(
+        self,
+        requirements: List[str],
+        python_version: str,
+        platform: str,
+        implementation: str,
+        abi: str,
+        resolver_state: Optional[Dict[str, Any]] = None,
+        tree_json_file: str = "dependency-tree.json",
+        tree_text_file: str = "dependency-tree.txt",
+        coverage_report_file: str = "coverage-report.md",
+    ) -> Dict[str, str]:
+        """
+        生成依赖树预览产物（不执行下载）。
+        """
+        sanitized = [line.strip() for line in requirements if line and line.strip()]
+        dependencies: List[Dict[str, str]] = []
+        for raw in sanitized:
+            pkg_name = self._extract_requirement_name(raw)
+            dependencies.append(
+                {
+                    "requirement": raw,
+                    "name": pkg_name,
+                    "state": DependencyState.RESOLVED.value,
+                    "note": "解析完成，待下载阶段确认 wheel/source 可用性",
+                }
+            )
+
+        payload = {
+            "target": {
+                "python_version": python_version,
+                "platform": platform,
+                "implementation": implementation,
+                "abi": abi,
+            },
+            "resolver_state": resolver_state or {},
+            "summary": {
+                "total_dependencies": len(dependencies),
+                "resolved_dependencies": len(dependencies),
+            },
+            "dependencies": dependencies,
+        }
+
+        tree_json_path = self.output_dir / tree_json_file
+        tree_text_path = self.output_dir / tree_text_file
+        coverage_report_path = self.output_dir / coverage_report_file
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        tree_json_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        lines = [
+            f"target: py{python_version} / {platform} / {implementation}-{abi}",
+            "dependencies:",
+        ]
+        for dep in dependencies:
+            lines.append(f"- {dep['name']} ({dep['requirement']}) [{dep['state']}]")
+        tree_text_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        report_lines = [
+            "# 依赖覆盖预览报告",
+            "",
+            f"- 目标 Python: `{python_version}`",
+            f"- 目标平台: `{platform}`",
+            f"- 实现/ABI: `{implementation}` / `{abi}`",
+            f"- 解析依赖数: `{len(dependencies)}`",
+            "",
+            "## 当前状态说明",
+            f"- `resolved`: `{len(dependencies)}`（已解析，待下载阶段验证 wheel/source 可用性）",
+            "- `wheel_ready`: `0`（预览阶段不判定）",
+            "- `source_required`: `0`（预览阶段不判定）",
+            "- `unresolved`: `0`（预览阶段不判定）",
+            "",
+            "## 依赖清单",
+        ]
+        for dep in dependencies:
+            report_lines.append(f"- `{dep['requirement']}` -> `{dep['state']}`")
+        coverage_report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+
+        return {
+            "tree_json": str(tree_json_path),
+            "tree_text": str(tree_text_path),
+            "coverage_report": str(coverage_report_path),
+        }
+
     def generate(
         self,
         output_file: str = "requirements-offline.txt",
         sources_file: str = "sources-offline.txt",
-        source_guide_file: str = "SOURCE_INSTALL_GUIDE.md"
+        source_guide_file: str = "SOURCE_INSTALL_GUIDE.md",
+        resolved_requirements: Optional[List[str]] = None,
+        reconciliation_file: str = "manifest-reconciliation.json",
     ) -> str:
         """
         Generate requirements.txt from downloaded packages
@@ -44,12 +139,25 @@ class RequirementsGenerator:
         wheel_packages = self._get_packages_info()
         source_packages = self._get_source_packages_info()
 
-        if not wheel_packages and not source_packages:
+        prepared_lock_requirements = self._prepare_resolved_requirements(resolved_requirements)
+        lock_output_requirements = [item["requirement"] for item in prepared_lock_requirements]
+        normalized_lock_requirements = [item["normalized"] for item in prepared_lock_requirements]
+        manifest_mode = "lock" if lock_output_requirements else "non_lock"
+
+        if not wheel_packages and not source_packages and not lock_output_requirements:
             raise ValueError(f"No packages found in {self.output_dir}")
 
         output_path = self.output_dir / output_file
         sources_path = self.output_dir / sources_file
         guide_path = self.output_dir / source_guide_file
+        reconciliation_path = self.output_dir / reconciliation_file
+
+        if lock_output_requirements:
+            offline_requirements = lock_output_requirements
+        else:
+            offline_requirements = self._build_requirements_from_wheels(wheel_packages)
+
+        wheel_hashes = self._build_wheel_hash_lookup(wheel_packages)
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write("# Generated offline requirements file\n")
@@ -57,16 +165,20 @@ class RequirementsGenerator:
                 f"# Install in an activated virtual environment with: "
                 f"python -m pip install --no-index --find-links={self.output_dir.name} -r {output_file}\n"
             )
-            f.write("# This file contains wheel-based dependencies only.\n")
+            f.write(f"# Manifest mode: {manifest_mode}\n")
+            if manifest_mode == "lock":
+                f.write("# This file is generated from resolver lock output.\n")
+            else:
+                f.write("# This file is generated by scanning downloaded wheel files.\n")
             f.write("#\n")
             f.write("# Note: This file contains exact versions of all downloaded packages\n\n")
 
-            for pkg_name, pkg_info in sorted(wheel_packages.items()):
-                requirement = f"{pkg_name}=={pkg_info['version']}"
-
-                if self.with_hashes and pkg_info.get('hash'):
+            for requirement in offline_requirements:
+                normalized_key = self._normalize_requirement_for_compare(requirement)
+                hash_value = wheel_hashes.get(normalized_key) if normalized_key else None
+                if self.with_hashes and hash_value:
                     f.write(f"{requirement} \\\n")
-                    f.write(f"    --hash=sha256:{pkg_info['hash']}\n")
+                    f.write(f"    --hash=sha256:{hash_value}\n")
                 else:
                     f.write(f"{requirement}\n")
 
@@ -79,10 +191,23 @@ class RequirementsGenerator:
             if guide_path.exists():
                 guide_path.unlink()
 
+        reconciliation = self._build_manifest_reconciliation(
+            lock_requirements=normalized_lock_requirements,
+            wheel_packages=wheel_packages,
+            source_packages=source_packages,
+            manifest_mode=manifest_mode,
+        )
+        reconciliation_path.write_text(
+            json.dumps(reconciliation, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
         self.last_summary = {
             "requirements_file": str(output_path),
             "sources_file": str(sources_path),
             "source_guide_file": str(guide_path),
+            "reconciliation_file": str(reconciliation_path),
+            "manifest_mode": manifest_mode,
             "wheel_count": len(wheel_packages),
             "source_count": len(source_packages),
             "sources_dir": str(self.sources_dir)
@@ -202,6 +327,117 @@ class RequirementsGenerator:
 
         return packages
 
+    @staticmethod
+    def _normalize_requirement_for_compare(requirement: str) -> Optional[str]:
+        """将 requirement 规范化为 name==version，用于对账。"""
+        line = requirement.strip()
+        if not line or line.startswith("#"):
+            return None
+        if " \\" in line:
+            line = line.split(" \\", 1)[0].strip()
+        if " --hash=" in line:
+            line = line.split(" --hash=", 1)[0].strip()
+        if ";" in line:
+            line = line.split(";", 1)[0].strip()
+        if "==" not in line:
+            return None
+        name, version = line.split("==", 1)
+        name = name.strip().replace("_", "-").lower()
+        version = version.strip()
+        if not name or not version:
+            return None
+        return f"{name}=={version}"
+
+    @classmethod
+    def _prepare_resolved_requirements(cls, requirements: Optional[List[str]]) -> List[Dict[str, str]]:
+        """准备锁定依赖：保留输出文本，并提供规范化键用于对账去重。"""
+        prepared: List[Dict[str, str]] = []
+        seen = set()
+        for raw in requirements or []:
+            requirement_line = raw.strip()
+            if not requirement_line or requirement_line.startswith("#"):
+                continue
+            normalized = cls._normalize_requirement_for_compare(requirement_line)
+            if not normalized or normalized in seen:
+                continue
+            prepared.append(
+                {
+                    "requirement": requirement_line,
+                    "normalized": normalized,
+                }
+            )
+            seen.add(normalized)
+        return prepared
+
+    @staticmethod
+    def _build_requirements_from_wheels(wheel_packages: Dict[str, Dict[str, str]]) -> List[str]:
+        """从扫描到的 wheel 信息构建 requirements 列表。"""
+        return [f"{pkg_name}=={pkg_info['version']}" for pkg_name, pkg_info in sorted(wheel_packages.items())]
+
+    @staticmethod
+    def _build_wheel_hash_lookup(wheel_packages: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+        """构建 requirement -> sha256 的映射。"""
+        lookup: Dict[str, str] = {}
+        for pkg_name, info in wheel_packages.items():
+            hash_value = info.get("hash")
+            if not hash_value:
+                continue
+            key = f"{pkg_name.lower()}=={info['version']}"
+            lookup[key] = hash_value
+        return lookup
+
+    @classmethod
+    def _build_artifact_requirement_sets(
+        cls,
+        wheel_packages: Dict[str, Dict[str, str]],
+        source_packages: Dict[str, Dict[str, str]],
+    ) -> Tuple[set, set]:
+        """构建 wheel/source 产物的规范化 requirement 集合。"""
+        wheel_set = {
+            cls._normalize_requirement_for_compare(f"{name}=={info['version']}")
+            for name, info in wheel_packages.items()
+        }
+        source_set = {
+            cls._normalize_requirement_for_compare(f"{name}=={info['version']}")
+            for name, info in source_packages.items()
+        }
+        return {x for x in wheel_set if x}, {x for x in source_set if x}
+
+    @classmethod
+    def _build_manifest_reconciliation(
+        cls,
+        lock_requirements: List[str],
+        wheel_packages: Dict[str, Dict[str, str]],
+        source_packages: Dict[str, Dict[str, str]],
+        manifest_mode: str,
+    ) -> Dict[str, Any]:
+        """构建锁定清单与产物的一致性对账结果。"""
+        wheel_set, source_set = cls._build_artifact_requirement_sets(wheel_packages, source_packages)
+        lock_set = set(lock_requirements)
+
+        if not lock_set:
+            return {
+                "manifest_mode": manifest_mode,
+                "lock_requirements": [],
+                "missing_from_artifacts": [],
+                "source_only": [],
+                "extra_artifacts_not_in_lock": [],
+                "note": "No resolver lock provided; running in non-lock mode.",
+            }
+
+        artifacts_union = wheel_set | source_set
+        source_only = sorted(lock_set & source_set - wheel_set)
+        missing = sorted(lock_set - artifacts_union)
+        extra = sorted(artifacts_union - lock_set)
+
+        return {
+            "manifest_mode": manifest_mode,
+            "lock_requirements": sorted(lock_set),
+            "missing_from_artifacts": missing,
+            "source_only": source_only,
+            "extra_artifacts_not_in_lock": extra,
+        }
+
     def _get_source_packages_info(self) -> Dict[str, Dict[str, str]]:
         """
         Extract source package information from the dedicated sources directory.
@@ -279,6 +515,17 @@ class RequirementsGenerator:
                 sha256_hash.update(byte_block)
 
         return sha256_hash.hexdigest()
+
+    @staticmethod
+    def _extract_requirement_name(requirement_line: str) -> str:
+        """从 requirement 行提取包名（用于预览展示）。"""
+        line = requirement_line.strip()
+        for splitter in ("==", ">=", "<=", "~=", "!=", ">", "<"):
+            if splitter in line:
+                return line.split(splitter, 1)[0].strip()
+        if ";" in line:
+            return line.split(";", 1)[0].strip()
+        return line
 
     def generate_install_script(
         self,
@@ -424,3 +671,77 @@ exit /b %EXIT_CODE%
             f.write(batch_content)
 
         return str(script_path)
+
+    def run_installability_check(
+        self,
+        requirements_file: str = "requirements-offline.txt",
+        report_file: str = "installability-report.md",
+        python_executable: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        在联网环境对离线包执行可安装性预演。
+        """
+        python_bin = python_executable or sys.executable
+        command = [
+            python_bin,
+            "-m",
+            "pip",
+            "install",
+            "--dry-run",
+            "--no-index",
+            "--find-links=.",
+            "-r",
+            requirements_file,
+        ]
+
+        result = subprocess.run(
+            command,
+            cwd=str(self.output_dir),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        success = result.returncode == 0
+        report_path = self.output_dir / report_file
+        now_str = datetime.now(timezone.utc).isoformat()
+
+        lines = [
+            "# 离线可安装性预演报告",
+            "",
+            f"- 执行时间(UTC): `{now_str}`",
+            f"- 结果: `{'PASS' if success else 'FAIL'}`",
+            f"- 工作目录: `{self.output_dir}`",
+            f"- 命令: `{' '.join(command)}`",
+        ]
+        if context:
+            lines.append("- 上下文:")
+            for key, value in context.items():
+                lines.append(f"  - `{key}`: `{value}`")
+
+        lines.extend(
+            [
+                "",
+                "## 标准输出",
+                "```text",
+                (result.stdout or "").strip(),
+                "```",
+                "",
+                "## 标准错误",
+                "```text",
+                (result.stderr or "").strip(),
+                "```",
+            ]
+        )
+        report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        return {
+            "success": success,
+            "returncode": result.returncode,
+            "report_file": str(report_path),
+            "command": command,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }

@@ -12,7 +12,9 @@
       "mcp__serena__read_memory",
       "mcp__serena__read_file",
       "mcp__serena__create_text_file",
-      "mcp__serena__replace_content"
+      "mcp__serena__replace_content",
+      "mcp__open-websearch__search",
+      "mcp__open-websearch__fetchWebContent"
     ],
     "deny": [],
     "ask": []

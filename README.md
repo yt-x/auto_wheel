@@ -13,6 +13,8 @@
 - 支持生成 hash 校验（安全安装）
 - 支持配置文件自定义 PyPI 镜像源
 - 自动生成离线安装脚本
+- 支持依赖树预览模式（`--plan-only`）与确认闸口（`--approve-tree`）
+- 支持离线可安装性预演（`--verify-installability`）
 
 ## 安装
 
@@ -57,6 +59,19 @@ auto-wheel -p 3.9 -r requirements.txt --platform manylinux2014_x86_64
 ```bash
 # 生成带 hash 的 requirements.txt
 auto-wheel -p 3.9 -r requirements.txt --with-hashes
+```
+
+### 高级模式（预览/确认/预演）
+
+```bash
+# 1) 仅解析并生成依赖树预览（不下载）
+auto-wheel -p 3.9 -pkg requests==2.31.0 --plan-only -o ./preview
+
+# 2) 基于已确认依赖树执行下载（可配合 --dry-run）
+auto-wheel -p 3.9 -pkg requests==2.31.0 --approve-tree ./preview/dependency-tree.json -o ./downloads
+
+# 3) 下载完成后执行离线可安装性预演
+auto-wheel -p 3.9 -r requirements.txt --verify-installability -o ./downloads
 ```
 
 ## 配置文件
@@ -186,6 +201,9 @@ python -m pip install --no-index --find-links=downloads package_name
   --with-hashes          生成带 hash 的 requirements.txt
   -v, --verbose          详细输出
   --dry-run              模拟运行，不实际下载
+  --plan-only            仅解析依赖并生成预览产物（dependency-tree.json/coverage-report.md），不执行下载
+  --approve-tree         指定已确认的 dependency-tree.json 作为确认闸口（配合 --plan-only 使用）
+  --verify-installability 下载完成后执行离线可安装性预演并生成 installability-report.md
 ```
 
 ## 示例场景
@@ -265,6 +283,26 @@ auto-wheel-gui
 
 当 uv 未安装（或手动配置 `use_uv_resolver:false`）时，会自动回退至 pip 直接下载流程，可能缺失跨版本条件依赖，日志会提示。
 
+### 离线清单生成模式（lock / non-lock）
+
+下载完成后，`requirements-offline.txt` 采用以下模式生成：
+
+- `lock`：若解析阶段得到锁定依赖列表（通常为 uv 成功场景），离线清单直接使用该锁定列表生成，不再按目录扫描推断版本。
+- `non_lock`：若未得到锁定依赖列表（如 uv 不可用并回退 pip 原生流程），离线清单会从下载目录扫描生成。
+
+CLI/GUI 会输出：
+
+- `Manifest mode: lock|non_lock`
+- `Manifest reconciliation report: <path>`
+
+其中对账报告会标注：
+
+- `missing_from_artifacts`：锁定清单里缺失的产物
+- `source_only`：仅有源码包的锁定依赖
+- `extra_artifacts_not_in_lock`：目录中存在但不在锁定清单内的额外产物（常见于复用目录历史残留）
+
+建议：生产使用尽量保证 `lock` 模式，并为每次任务使用独立输出目录。
+
 ### 平台兼容性
 
 - 纯 Python 包：会下载 `py3-none-any.whl`，适用所有平台
@@ -284,7 +322,7 @@ auto-wheel-gui
 #### 解决思路
 
 - 保持“wheel 优先”不变，仅在可识别的“无可用发行版”错误下触发源码回退。
-- 回退阶段放宽约束（移除 `--only-binary` 与目标解释器/平台约束参数），让源码包能够落地到 `sources/`。
+- 回退阶段保持目标约束语义并启用 source-only 策略，避免主机平台 wheel 污染目标结果。
 - 对 `uv` 路径增加兜底：当 uv 解析列表下载失败且命中“无可用发行版”特征时，自动回退到原始包列表重试。
 
 #### 实际解决方式
@@ -337,6 +375,8 @@ auto-wheel-gui
 - 检查 Python 版本是否匹配
 - 使用 `--with-hashes` 时确保使用完整的 requirements 文件
 - 检查平台是否匹配
+- 检查 `Manifest mode`。若为 `non_lock`，建议改用独立输出目录并启用 uv 后重试
+- 检查 `manifest-reconciliation.json` 中是否存在 `extra_artifacts_not_in_lock`
 
 ### 问题：安装脚本提示“检测到源码包清单”并退出
 
@@ -344,6 +384,51 @@ auto-wheel-gui
 - 先查看 `downloads/SOURCE_INSTALL_GUIDE.md`
 - 按 `downloads/sources-offline.txt` 逐个处理 `downloads/sources/` 中的源码包
 - 源码包处理完成后，再执行 `python -m pip install --no-index --find-links=downloads -r downloads/requirements-offline.txt`
+
+## 开发与测试
+
+项目使用 Python 标准库 `unittest` 编写测试，无需额外安装 pytest。
+
+### 运行全部测试
+
+```bash
+# 确保已安装项目（可编辑模式）
+python -m pip install -e .
+
+# 运行全部测试
+python -m unittest discover -s tests -p "test_*.py" -v
+```
+
+### 运行单个测试文件
+
+```bash
+# 测试 CLI 与预览功能
+python -m unittest tests.test_preview_and_cli -v
+
+# 测试下载回退逻辑
+python -m unittest tests.test_downloader_fallback -v
+
+# 测试清单生成
+python -m unittest tests.test_manifest_generation -v
+
+# 测试依赖解析
+python -m unittest tests.test_resolver -v
+```
+
+### 测试覆盖范围
+
+| 测试文件 | 覆盖内容 |
+|---------|---------|
+| `test_preview_and_cli.py` | CLI 参数解析、`--plan-only` 与 `--approve-tree` 互斥、预览产物生成 |
+| `test_downloader_fallback.py` | wheel 优先策略、无 wheel 自动回退源码、直接 sdist 获取 |
+| `test_manifest_generation.py` | lock / non-lock 模式清单生成、hash 校验保留 |
+| `test_resolver.py` | uv/pip 依赖解析、平台转换、错误分类 |
+| `test_approval_gate.py` | 确认闸口逻辑（允许/阻断/跳过） |
+| `test_installability_check.py` | 离线可安装性预演报告生成 |
+| `test_main_verify_exit.py` | `--verify-installability` 失败时的退出码 |
+| `test_state_model.py` | 状态模型枚举与序列化 |
+| `test_legacy_regression_fixtures.py` | 历史问题回归（无 wheel 原因检测、stage 摘要） |
+| `test_gui_worker_manifest_mode.py` | GUI Worker 的 manifest 模式透传 |
 
 ## 许可证
 

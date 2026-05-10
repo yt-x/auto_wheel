@@ -39,6 +39,17 @@ auto-wheel -p 3.9 -pkg requests flask
 auto-wheel -p 3.9 -r examples/example_requirements.txt --dry-run
 ```
 
+### 示例 4：仅预览依赖树（高级）
+
+```bash
+auto-wheel -p 3.9 -pkg requests==2.31.0 --plan-only -o preview
+```
+
+生成产物：
+- `preview/dependency-tree.json`
+- `preview/dependency-tree.txt`
+- `preview/coverage-report.md`
+
 ## 3. 使用配置文件
 
 ### 创建配置文件
@@ -86,6 +97,17 @@ install.bat           # Windows
 # 或者使用 pip 命令
 python -m pip install --no-index --find-links=. -r requirements-offline.txt
 ```
+
+执行完成后请先关注两行输出：
+
+- `Manifest mode: lock|non_lock`
+- `Manifest reconciliation report: <path>`
+
+说明：
+
+- `lock`：离线清单来自解析锁定结果，版本一致性更强。
+- `non_lock`：离线清单来自目录扫描，若复用输出目录可能受历史残留影响。
+- `manifest-reconciliation.json` 会给出缺失项、仅源码项、以及目录额外产物，便于排障。
 
 > 重要：请先激活 `venv/conda` 虚拟环境。`install.sh/install.bat` 会拒绝在全局 Python 环境执行，避免误装到系统环境。
 > 若存在 `sources-offline.txt`，请先阅读 `SOURCE_INSTALL_GUIDE.md` 处理 `sources/` 中的源码包，再执行离线安装。
@@ -152,6 +174,8 @@ auto-wheel -p 3.9 -r examples/example_requirements.txt -v
 auto-wheel -p 3.9 -r examples/example_requirements.txt -o ./my_packages
 ```
 
+建议：每次任务使用独立输出目录（例如按日期或构建号），可以显著降低 `non_lock` 模式下历史残留污染风险。
+
 ### 出现 uv 回退提示是否异常？
 
 不是异常。若日志显示：
@@ -160,6 +184,22 @@ auto-wheel -p 3.9 -r examples/example_requirements.txt -o ./my_packages
 - 且最终为 `Download completed successfully!`
 
 表示工具已按设计完成兜底回退。此时仍需根据 `sources-offline.txt` / `SOURCE_INSTALL_GUIDE.md` 先处理源码包，再做离线安装。
+
+### 如何启用确认闸口？
+
+先执行预览，再传入确认文件：
+
+```bash
+auto-wheel -p 3.9 -pkg requests==2.31.0 --approve-tree preview/dependency-tree.json
+```
+
+### 如何在联网端提前验证私网可安装性？
+
+```bash
+auto-wheel -p 3.9 -r requirements.txt --verify-installability -o downloads
+```
+
+执行后会生成 `downloads/installability-report.md`。
 
 ## 8. 完整工作流示例
 

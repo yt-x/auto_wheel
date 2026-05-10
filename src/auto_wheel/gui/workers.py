@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from ..approval_gate import should_block_download
 from ..config import Config
 from ..downloader import WheelDownloader
 from ..requirements_generator import RequirementsGenerator
@@ -42,6 +43,21 @@ def _count_manifest_entries(manifest_path: Path) -> int:
     return count
 
 
+def _format_resolution_state(snapshot: dict) -> List[str]:
+    """将解析状态快照转换为日志行。"""
+    if not snapshot:
+        return []
+    lines = [
+        f"[resolver-state] state={snapshot.get('job_state', 'unknown')}, "
+        f"stage={snapshot.get('stage', 'unknown')}, resolver={snapshot.get('resolver', 'unknown')}"
+    ]
+    if snapshot.get("failure_kind"):
+        lines.append(f"[resolver-state] failure_kind={snapshot['failure_kind']}")
+    if snapshot.get("reason"):
+        lines.append(f"[resolver-state] reason={snapshot['reason']}")
+    return lines
+
+
 @dataclass
 class DownloadRequest:
     """
@@ -63,6 +79,9 @@ class DownloadRequest:
     dry_run: bool
     retries: int
     timeout: int
+    plan_only: bool
+    require_tree_approval: bool
+    tree_approved: bool
 
 
 class DownloadWorker(QThread):
@@ -134,14 +153,66 @@ class DownloadWorker(QThread):
             timeout=req.timeout,
             verbose=req.verbose,
         )
+        result = None
+        preview_requirements: List[str] = []
+        manifest_lock_requirements: Optional[List[str]] = None
         if req.source_mode == "requirements":
             if not req.requirements_path:
                 raise ValueError("未提供 requirements 文件路径。")
             # 保留 -r 原生语义：优先 uv，失败或不可用时直接透传 pip -r
             resolved_packages, used_uv, resolver_warning = resolver.resolve_from_requirements_file(req.requirements_path)
+            for line in _format_resolution_state(resolver.get_last_resolution_state()):
+                self._log(line)
             if resolver_warning:
                 self._log(f"解析提示：{resolver_warning}")
 
+            if used_uv and resolved_packages:
+                preview_requirements = resolved_packages
+                manifest_lock_requirements = resolved_packages
+            else:
+                from ..utils import load_requirements
+                preview_requirements = load_requirements(req.requirements_path)
+        else:
+            packages_input = [pkg.strip() for pkg in req.packages if pkg.strip()]
+            if not packages_input:
+                raise ValueError("未找到需要处理的包，请检查输入")
+
+            resolved_packages, used_uv, resolver_warning = resolver.resolve(packages_input)
+            for line in _format_resolution_state(resolver.get_last_resolution_state()):
+                self._log(line)
+            if resolver_warning:
+                self._log(f"解析提示：{resolver_warning}")
+
+            if used_uv and resolved_packages:
+                preview_requirements = resolved_packages
+                manifest_lock_requirements = resolved_packages
+            else:
+                preview_requirements = packages_input
+
+        generator = RequirementsGenerator(output_dir=output_dir, with_hashes=req.with_hashes)
+        if req.plan_only or req.require_tree_approval:
+            self._log("生成依赖树预览产物...")
+            preview_files = generator.generate_dependency_preview(
+                requirements=preview_requirements,
+                python_version=python_version,
+                platform=platform,
+                implementation=req.implementation or "cp",
+                abi=req.abi or "auto",
+                resolver_state=resolver.get_last_resolution_state(),
+            )
+            self._log(f"依赖树(JSON)：{preview_files['tree_json']}")
+            self._log(f"依赖树(文本)：{preview_files['tree_text']}")
+            self._log(f"覆盖报告：{preview_files['coverage_report']}")
+
+        if req.plan_only:
+            self._log("已完成预览模式（未执行下载）。")
+            self.finished.emit(True, "预览完成。")
+            return
+
+        if should_block_download(req.require_tree_approval, req.tree_approved, req.plan_only):
+            raise RuntimeError("已启用依赖树确认闸口，但尚未勾选“允许下载”。请确认预览结果后重试。")
+
+        if req.source_mode == "requirements":
             if used_uv and resolved_packages:
                 result = downloader.download_resolved_requirements(
                     resolved_packages,
@@ -153,14 +224,6 @@ class DownloadWorker(QThread):
                     dry_run=req.dry_run
                 )
         else:
-            packages_input = [pkg.strip() for pkg in req.packages if pkg.strip()]
-            if not packages_input:
-                raise ValueError("未找到需要处理的包，请检查输入")
-
-            resolved_packages, used_uv, resolver_warning = resolver.resolve(packages_input)
-            if resolver_warning:
-                self._log(f"解析提示：{resolver_warning}")
-
             if used_uv and resolved_packages:
                 result = downloader.download_resolved_requirements(
                     resolved_packages,
@@ -208,9 +271,16 @@ class DownloadWorker(QThread):
                 self._log(f"回退原因：{result['fallback_reason']}")
             self._log("请先按 SOURCE_INSTALL_GUIDE.md 处理源码包，再执行离线安装。")
 
-        generator = RequirementsGenerator(output_dir=output_dir, with_hashes=req.with_hashes)
         self._log("生成离线 requirements 与安装脚本...")
-        req_file = generator.generate()
+        req_file = generator.generate(resolved_requirements=manifest_lock_requirements)
+        summary = generator.last_summary if isinstance(generator.last_summary, dict) else {}
+        manifest_mode = summary.get("manifest_mode", "unknown")
+        reconciliation_file = summary.get("reconciliation_file")
+        if manifest_mode == "non_lock":
+            self._log("警告：当前为非锁定模式生成，输出目录历史残留可能影响离线依赖版本。")
+        self._log(f"清单模式：{manifest_mode}")
+        if reconciliation_file:
+            self._log(f"对账报告：{reconciliation_file}")
         script_path = generator.generate_install_script()
 
         wheel_count = len(list(Path(output_dir).glob("*.whl")))

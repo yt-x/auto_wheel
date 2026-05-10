@@ -3,6 +3,7 @@ Main entry point for auto-wheel
 """
 
 import sys
+import json
 from pathlib import Path
 
 from .cli import parse_arguments, validate_arguments
@@ -10,7 +11,7 @@ from .config import Config
 from .downloader import WheelDownloader
 from .requirements_generator import RequirementsGenerator
 from .resolver import DependencyResolver
-from .utils import get_python_version_warning, validate_python_version
+from .utils import get_python_version_warning, validate_python_version, load_requirements
 
 
 def _summarize_stage_errors(errors):
@@ -36,6 +37,42 @@ def _count_manifest_entries(manifest_path: Path) -> int:
             if stripped and not stripped.startswith("#"):
                 count += 1
     return count
+
+
+def _print_resolution_state(snapshot: dict) -> None:
+    """统一输出解析阶段状态，便于 CLI/GUI 语义一致。"""
+    if not snapshot:
+        return
+    state = snapshot.get("job_state", "unknown")
+    stage = snapshot.get("stage", "unknown")
+    resolver = snapshot.get("resolver", "unknown")
+    failure_kind = snapshot.get("failure_kind")
+    reason = snapshot.get("reason")
+    print(f"[resolver-state] state={state}, stage={stage}, resolver={resolver}", file=sys.stderr)
+    if failure_kind:
+        print(f"[resolver-state] failure_kind={failure_kind}", file=sys.stderr)
+    if reason:
+        print(f"[resolver-state] reason={reason}", file=sys.stderr)
+
+
+def _validate_approved_tree(approved_tree_path: str, python_version: str, platform: str) -> None:
+    """校验确认闸口文件是否与当前任务上下文匹配。"""
+    path = Path(approved_tree_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    target = payload.get("target", {})
+    target_python = str(target.get("python_version") or "")
+    target_platform = str(target.get("platform") or "")
+    if target_python and target_python != python_version:
+        raise ValueError(
+            f"Approved dependency tree Python version mismatch: expected {python_version}, got {target_python}"
+        )
+    if target_platform and target_platform != platform:
+        raise ValueError(
+            f"Approved dependency tree platform mismatch: expected {platform}, got {target_platform}"
+        )
+    dependencies = payload.get("dependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        raise ValueError("Approved dependency tree is empty or invalid.")
 
 
 def main():
@@ -120,55 +157,93 @@ def main():
         )
         print("Downloading packages...")
         print()
+        preview_requirements = []
+        manifest_lock_requirements = None
+        result = None
 
         if args.requirements:
             # 保留 -r 原生语义：优先尝试 uv 解析，失败或不可用则直接透传给 pip -r
             resolved_packages, used_uv, resolver_warning = resolver.resolve_from_requirements_file(args.requirements)
+            _print_resolution_state(resolver.get_last_resolution_state())
             if resolver_warning:
                 print(f"Warning: {resolver_warning}", file=sys.stderr)
 
-            if used_uv and resolved_packages:
-                result = downloader.download_resolved_requirements(
-                    resolved_packages,
-                    dry_run=args.dry_run
-                )
-            else:
-                result = downloader.download_from_requirements(
-                    args.requirements,
-                    dry_run=args.dry_run
-                )
+            preview_requirements = resolved_packages if used_uv and resolved_packages else load_requirements(args.requirements)
+            manifest_lock_requirements = resolved_packages if used_uv and resolved_packages else None
+            if not args.plan_only:
+                if used_uv and resolved_packages:
+                    result = downloader.download_resolved_requirements(
+                        resolved_packages,
+                        dry_run=args.dry_run
+                    )
+                else:
+                    result = downloader.download_from_requirements(
+                        args.requirements,
+                        dry_run=args.dry_run
+                    )
         else:
             packages_input = [pkg.strip() for pkg in (args.packages or []) if pkg.strip()]
             if not packages_input:
                 raise ValueError("No packages to process. Check requirements file or --packages input.")
 
             resolved_packages, used_uv, resolver_warning = resolver.resolve(packages_input)
+            _print_resolution_state(resolver.get_last_resolution_state())
             if resolver_warning:
                 print(f"Warning: {resolver_warning}", file=sys.stderr)
 
-            if used_uv and resolved_packages:
-                result = downloader.download_resolved_requirements(
-                    resolved_packages,
-                    dry_run=args.dry_run
-                )
-                if (
-                    not args.dry_run
-                    and not result.get("success")
-                    and WheelDownloader._detect_no_wheel_reason(result.get("errors") or [])
-                ):
-                    print(
-                        "Warning: uv 解析结果下载失败，回退到原始包列表重试。",
-                        file=sys.stderr
+            preview_requirements = resolved_packages if used_uv and resolved_packages else packages_input
+            manifest_lock_requirements = resolved_packages if used_uv and resolved_packages else None
+            if not args.plan_only:
+                if used_uv and resolved_packages:
+                    result = downloader.download_resolved_requirements(
+                        resolved_packages,
+                        dry_run=args.dry_run
                     )
+                    if (
+                        not args.dry_run
+                        and not result.get("success")
+                        and WheelDownloader._detect_no_wheel_reason(result.get("errors") or [])
+                    ):
+                        print(
+                            "Warning: uv 解析结果下载失败，回退到原始包列表重试。",
+                            file=sys.stderr
+                        )
+                        result = downloader.download_packages(
+                            packages_input,
+                            dry_run=args.dry_run
+                        )
+                else:
                     result = downloader.download_packages(
                         packages_input,
                         dry_run=args.dry_run
                     )
-            else:
-                result = downloader.download_packages(
-                    packages_input,
-                    dry_run=args.dry_run
-                )
+
+        if args.plan_only:
+            generator = RequirementsGenerator(
+                output_dir=output_dir,
+                with_hashes=args.with_hashes
+            )
+            preview_files = generator.generate_dependency_preview(
+                requirements=preview_requirements,
+                python_version=python_version,
+                platform=platform,
+                implementation=args.implementation,
+                abi=args.abi or "auto",
+                resolver_state=resolver.get_last_resolution_state(),
+            )
+            print("\nDependency preview generated successfully!")
+            print(f"Dependency tree JSON: {preview_files['tree_json']}")
+            print(f"Dependency tree text: {preview_files['tree_text']}")
+            print(f"Coverage report: {preview_files['coverage_report']}")
+            return
+
+        if args.approve_tree:
+            _validate_approved_tree(args.approve_tree, python_version, platform)
+            print(f"Dependency tree approved: {args.approve_tree}")
+
+        if isinstance(result, dict):
+            result.setdefault("state", {})
+            result["state"]["resolver"] = resolver.get_last_resolution_state()
 
         # Check result
         if not result["success"]:
@@ -202,8 +277,16 @@ def main():
         )
 
         try:
-            req_file = generator.generate()
+            req_file = generator.generate(resolved_requirements=manifest_lock_requirements)
             print(f"Requirements file generated: {req_file}")
+            summary = generator.last_summary if isinstance(generator.last_summary, dict) else {}
+            manifest_mode = summary.get("manifest_mode", "unknown")
+            reconciliation_file = summary.get("reconciliation_file")
+            if manifest_mode == "non_lock":
+                print("Warning: Manifest generated in non-lock mode; output directory residue may affect dependency versions.")
+            print(f"Manifest mode: {manifest_mode}")
+            if reconciliation_file:
+                print(f"Manifest reconciliation report: {reconciliation_file}")
 
             # Generate installation scripts
             script_file = generator.generate_install_script()
@@ -214,12 +297,40 @@ def main():
             sources_manifest = Path(output_dir) / "sources-offline.txt"
             source_guide = Path(output_dir) / "SOURCE_INSTALL_GUIDE.md"
             source_count = _count_manifest_entries(sources_manifest)
+            artifact_states = {
+                "dependency_tree": "generated" if (Path(output_dir) / "dependency-tree.json").exists() else "missing",
+                "coverage_report": "generated" if (Path(output_dir) / "coverage-report.md").exists() else "missing",
+                "requirements_offline": "generated" if Path(req_file).exists() else "missing",
+            }
+            result["state"]["artifacts"] = artifact_states
 
             print(f"\nArtifacts summary: wheels={wheel_count}, source packages={source_count}")
+            print(f"Artifact states: {artifact_states}")
             if source_count > 0:
                 print(f"  Source packages dir: {Path(output_dir) / 'sources'}")
                 print(f"  Source manifest: {sources_manifest}")
                 print(f"  Source guide: {source_guide}")
+
+            if args.verify_installability:
+                print("\nRunning installability verification...")
+                verify_result = generator.run_installability_check(
+                    requirements_file="requirements-offline.txt",
+                    context={
+                        "python_version": python_version,
+                        "platform": platform,
+                        "implementation": args.implementation,
+                        "abi": args.abi or "auto",
+                    },
+                )
+                verify_state = "validated" if verify_result["success"] else "invalid"
+                print(f"Installability report: {verify_result['report_file']} ({verify_state})")
+                if not verify_result["success"]:
+                    print(
+                        "Installability verification failed. "
+                        f"See report: {verify_result['report_file']}",
+                        file=sys.stderr
+                    )
+                    sys.exit(2)
 
             print("\n" + "=" * 60)
             print("Setup complete! To install offline:")

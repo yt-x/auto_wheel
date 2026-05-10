@@ -1,0 +1,79 @@
+schema: spec-driven
+
+context: |
+  项目：auto-wheel — Python 离线 wheel 包自动下载工具
+  主要运行平台：Windows（同时支持跨平台下载 Linux/macOS 包）
+
+  技术栈：
+    语言：Python >=3.8
+    核心依赖：pip>=21.0, packaging>=21.0, tqdm>=4.62.0
+    可选 GUI：PyQt6>=6.7, qt-material>=2.14
+    构建系统：setuptools>=45 + wheel
+    包管理：uv（可选依赖解析）
+    测试：unittest + unittest.mock
+
+  项目结构：
+    src/auto_wheel/          — 核心源代码（分层架构）
+    src/auto_wheel/gui/      — PyQt6 图形界面
+    tests/                   — 单元测试
+    docs/                    — 技术文档
+    examples/                — 配置和 requirements 示例
+
+  架构模式：
+    CLI 入口 (main.py) → 参数解析 (cli.py) + 配置管理 (config.py)
+      → 依赖解析 (resolver.py) → 下载引擎 (downloader.py)
+      → 离线清单生成 (requirements_generator.py)
+    GUI 入口 (gui/app.py) → 主窗口 (main_window.py)
+      → 表单 (forms.py) + 后台线程 (workers.py) + 主题 (theme.py)
+
+  核心业务逻辑：
+    - 两阶段下载策略：优先 wheel-only，失败后智能回退源码包
+    - 可选 uv pip compile 依赖解析，不可用时自动回退 pip 原始流程
+    - 线性退避重试（默认 3 次，间隔 3s/6s/9s）
+    - 源码包自动分流到 sources/ 目录，生成编译指引
+    - 生成 install.sh（Linux/macOS）和 install.bat（Windows）安装脚本
+    - 安装脚本强制虚拟环境检查
+
+  入口点：
+    auto-wheel      → auto_wheel.main:main（CLI）
+    auto-wheel-gui  → auto_wheel.gui.app:run（GUI）
+
+  配置方式：config.json（支持镜像源、超时、重试等参数）
+
+rules:
+  proposal:
+    - 提案必须说明对离线安装流程的影响
+    - 涉及下载逻辑变更时需说明回退机制的兼容性
+    - 明确标注是否影响 CLI 和 GUI 两个入口
+
+  specs:
+    - 使用 Given/When/Then 格式编写验收标准
+    - 覆盖正常路径和异常路径（网络超时、无可用 wheel、pip 不可用等）
+    - 涉及跨平台行为时需分别描述 Windows 和 Linux 场景
+
+  design:
+    - 遵循现有分层架构，新功能应明确归属于哪一层
+    - 优先复用 utils.py 中的已有工具函数
+    - 涉及子进程调用时必须使用 subprocess，禁止 os.system
+    - 文件路径操作优先使用 pathlib.Path
+
+  tasks:
+    - 将任务拆分为可独立测试的原子单元
+    - CLI 和 GUI 的变更应作为独立任务
+    - 每个任务需包含对应的测试要求
+
+  apply:
+    - 严格遵循 PEP 8 编码规范（缩进 4 空格、行长 ≤79 字符、空行规则、导入排序）
+    - 类名使用 PascalCase，函数和变量使用 snake_case，常量使用 UPPER_SNAKE_CASE
+    - 私有方法以单下划线前缀命名（如 _method_name）
+    - 所有公有类和函数必须包含 Google 风格 docstring（含 Args/Returns/Raises）
+    - 使用类型提示（type hints）标注函数签名
+    - 导入顺序：标准库 → 第三方库 → 本地模块，各组之间空一行
+    - 字符串优先使用双引号，除非字符串内含双引号
+    - 保持与现有代码风格一致，不做无关重构
+    - Windows 为主要运行平台，路径和脚本生成需考虑 Windows 兼容性
+
+  verify:
+    - 运行 unittest 测试套件确认无回归
+    - 验证 CLI 入口 auto-wheel --help 正常输出
+    - 检查生成的安装脚本（install.sh 和 install.bat）语法正确性

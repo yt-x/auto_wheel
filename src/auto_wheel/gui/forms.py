@@ -51,6 +51,9 @@ class FormState:
     dry_run: bool
     retries: int
     timeout: int
+    plan_only: bool
+    require_tree_approval: bool
+    tree_approved: bool
 
 
 class ParameterForm(QWidget):
@@ -162,6 +165,17 @@ class ParameterForm(QWidget):
         self.dry_run_check = QCheckBox("仅模拟（不下载）")
         form.addRow(self.dry_run_check)
 
+        self.plan_only_check = QCheckBox("仅预览依赖树（不下载）")
+        form.addRow(self.plan_only_check)
+
+        self.require_tree_approval_check = QCheckBox("启用依赖树确认闸口（高级）")
+        self.require_tree_approval_check.toggled.connect(self._toggle_tree_approval_inputs)
+        form.addRow(self.require_tree_approval_check)
+
+        self.tree_approved_check = QCheckBox("我已确认依赖树，允许下载")
+        self.tree_approved_check.setEnabled(False)
+        form.addRow(self.tree_approved_check)
+
         self.retries_spin = QSpinBox()
         self.retries_spin.setRange(1, 10)
         self.retries_spin.setValue(3)
@@ -196,6 +210,12 @@ class ParameterForm(QWidget):
         use_requirements = checked
         self.requirements_path_edit.setEnabled(use_requirements)
         self.packages_edit.setEnabled(not use_requirements)
+
+    def _toggle_tree_approval_inputs(self, checked: bool) -> None:
+        """根据是否启用确认闸口切换确认框状态。"""
+        self.tree_approved_check.setEnabled(checked)
+        if not checked:
+            self.tree_approved_check.setChecked(False)
 
     def collect_state(self) -> FormState:
         """
@@ -232,6 +252,9 @@ class ParameterForm(QWidget):
             dry_run=self.dry_run_check.isChecked(),
             retries=self.retries_spin.value(),
             timeout=self.timeout_spin.value(),
+            plan_only=self.plan_only_check.isChecked(),
+            require_tree_approval=self.require_tree_approval_check.isChecked(),
+            tree_approved=self.tree_approved_check.isChecked(),
         )
 
     def build_request(self) -> DownloadRequest:
@@ -265,4 +288,7 @@ class ParameterForm(QWidget):
             dry_run=state.dry_run,
             retries=state.retries,
             timeout=state.timeout,
+            plan_only=state.plan_only,
+            require_tree_approval=state.require_tree_approval,
+            tree_approved=state.tree_approved,
         )
