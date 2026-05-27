@@ -31,6 +31,13 @@ Examples:
     # Download specific packages
     auto-wheel -p 3.9 -pkg requests flask pandas
 
+    # Auto-detect dependency source from project directory
+    auto-wheel -p 3.9 --from ./my-project
+
+    # Specify a specific lock file or pyproject.toml
+    auto-wheel -p 3.9 --from ./my-project/uv.lock
+    auto-wheel -p 3.9 --from ./my-project/pyproject.toml
+
     # Specify output directory
     auto-wheel -p 3.9 -r requirements.txt -o ./my_wheels
 
@@ -72,6 +79,13 @@ Examples:
         "--packages",
         nargs="+",
         help="Package names to download (space separated)",
+    )
+    input_group.add_argument(
+        "--from",
+        type=str,
+        dest="from_path",
+        help="Path to dependency source file or project directory "
+        "(auto-detects requirements.txt / pyproject.toml / lock file)",
     )
 
     # Output directory
@@ -174,6 +188,12 @@ def validate_arguments(args: argparse.Namespace) -> None:
             raise ValueError(f"Requirements file not found: {args.requirements}")
         if not req_path.is_file():
             raise ValueError(f"Not a file: {args.requirements}")
+
+    # Validate --from path exists
+    if getattr(args, "from_path", None):
+        from_path = Path(args.from_path)
+        if not from_path.exists():
+            raise ValueError(f"Path not found: {args.from_path}")
 
     # Validate Python version format
     if args.python_version:

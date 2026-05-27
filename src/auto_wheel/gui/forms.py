@@ -38,6 +38,7 @@ class FormState:
 
     source_mode: str
     requirements_path: Optional[str]
+    from_path: Optional[str]
     packages: List[str]
     python_version: Optional[str]
     output_dir: Optional[str]
@@ -80,11 +81,13 @@ class ParameterForm(QWidget):
         vbox = QVBoxLayout(group)
 
         self.requirements_radio = QRadioButton("使用 requirements.txt")
+        self.from_radio = QRadioButton("自动检测 (--from)")
         self.packages_radio = QRadioButton("指定包列表")
         self.requirements_radio.setChecked(True)
 
         radio_group = QButtonGroup(group)
         radio_group.addButton(self.requirements_radio)
+        radio_group.addButton(self.from_radio)
         radio_group.addButton(self.packages_radio)
 
         vbox.addWidget(self.requirements_radio)
@@ -98,6 +101,21 @@ class ParameterForm(QWidget):
         vbox.addLayout(req_row)
 
         vbox.addSpacing(8)
+        vbox.addWidget(self.from_radio)
+        self.from_path_edit = QLineEdit()
+        self.from_path_edit.setPlaceholderText("文件或项目目录路径（自动检测类型）")
+        self.from_path_edit.setEnabled(False)
+        from_row = QHBoxLayout()
+        from_row.addWidget(self.from_path_edit, stretch=1)
+        browse_from_dir_btn = QPushButton("选择目录")
+        browse_from_dir_btn.clicked.connect(self._choose_from_dir)
+        from_row.addWidget(browse_from_dir_btn)
+        browse_from_file_btn = QPushButton("选择文件")
+        browse_from_file_btn.clicked.connect(self._choose_from_file)
+        from_row.addWidget(browse_from_file_btn)
+        vbox.addLayout(from_row)
+
+        vbox.addSpacing(8)
         vbox.addWidget(self.packages_radio)
         self.packages_edit = QPlainTextEdit()
         self.packages_edit.setPlaceholderText("每行一个包，例如：\nrequests==2.31.0\nflask")
@@ -105,6 +123,7 @@ class ParameterForm(QWidget):
         vbox.addWidget(self.packages_edit)
 
         self.requirements_radio.toggled.connect(self._toggle_source_inputs)
+        self.from_radio.toggled.connect(self._toggle_source_inputs)
 
         return group
 
@@ -193,6 +212,19 @@ class ParameterForm(QWidget):
         if file_path:
             self.requirements_path_edit.setText(file_path)
 
+    def _choose_from_dir(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择项目目录")
+        if directory:
+            self.from_path_edit.setText(directory)
+
+    def _choose_from_file(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择依赖文件", "",
+            "Dependency Files (*.txt *.toml *.lock);;All Files (*)"
+        )
+        if file_path:
+            self.from_path_edit.setText(file_path)
+
     def _choose_config_file(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(self, "选择 config.json", "", "JSON Files (*.json);;All Files (*)")
         if file_path:
@@ -204,12 +236,11 @@ class ParameterForm(QWidget):
             self.output_dir_edit.setText(directory)
 
     def _toggle_source_inputs(self, checked: bool) -> None:
-        """
-        根据选择启用/禁用输入。
-        """
-        use_requirements = checked
+        use_requirements = self.requirements_radio.isChecked()
+        use_from = self.from_radio.isChecked()
         self.requirements_path_edit.setEnabled(use_requirements)
-        self.packages_edit.setEnabled(not use_requirements)
+        self.from_path_edit.setEnabled(use_from)
+        self.packages_edit.setEnabled(not use_requirements and not use_from)
 
     def _toggle_tree_approval_inputs(self, checked: bool) -> None:
         """根据是否启用确认闸口切换确认框状态。"""
@@ -221,8 +252,14 @@ class ParameterForm(QWidget):
         """
         将当前 UI 值转换为结构化数据。
         """
-        source_mode = "requirements" if self.requirements_radio.isChecked() else "packages"
+        if self.from_radio.isChecked():
+            source_mode = "auto_detect"
+        elif self.requirements_radio.isChecked():
+            source_mode = "requirements"
+        else:
+            source_mode = "packages"
         req_path = self.requirements_path_edit.text().strip() or None
+        from_path = self.from_path_edit.text().strip() or None
         packages = [line.strip() for line in self.packages_edit.toPlainText().splitlines() if line.strip()]
 
         python_version = self.python_version_edit.text().strip() or None
@@ -239,6 +276,7 @@ class ParameterForm(QWidget):
         return FormState(
             source_mode=source_mode,
             requirements_path=req_path,
+            from_path=from_path,
             packages=packages,
             python_version=python_version,
             output_dir=output_dir,
@@ -268,6 +306,11 @@ class ParameterForm(QWidget):
                 raise ValueError("请指定 requirements.txt 路径。")
             if not Path(state.requirements_path).exists():
                 raise ValueError("指定的 requirements 文件不存在。")
+        elif state.source_mode == "auto_detect":
+            if not state.from_path:
+                raise ValueError("请指定文件或项目目录路径。")
+            if not Path(state.from_path).exists():
+                raise ValueError("指定的路径不存在。")
         else:
             if not state.packages:
                 raise ValueError("请至少输入一个包名。")
@@ -275,6 +318,7 @@ class ParameterForm(QWidget):
         return DownloadRequest(
             source_mode=state.source_mode,
             requirements_path=state.requirements_path,
+            from_path=state.from_path,
             packages=state.packages,
             python_version=state.python_version,
             output_dir=state.output_dir,

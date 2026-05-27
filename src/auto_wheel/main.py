@@ -12,6 +12,7 @@ from .config import Config
 from .downloader import WheelDownloader
 from .requirements_generator import RequirementsGenerator
 from .resolver import DependencyResolver
+from .source_reader import SourceReader
 from .utils import get_python_version_warning, validate_python_version, load_requirements
 
 
@@ -116,6 +117,8 @@ def main():
 
         if args.requirements:
             print(f"Requirements file: {args.requirements}")
+        elif getattr(args, "from_path", None):
+            print(f"Source path: {args.from_path}")
         elif args.packages:
             print(f"Packages: {', '.join(args.packages)}")
 
@@ -183,6 +186,68 @@ def main():
                         args.requirements,
                         dry_run=args.dry_run
                     )
+        elif getattr(args, "from_path", None):
+            reader = SourceReader(verbose=args.verbose)
+            source = reader.read(args.from_path)
+            print(f"Detected source: {source.source_path} (type={source.source_type.value})")
+            if source.warnings:
+                for warning in source.warnings:
+                    print(f"Note: {warning}")
+            if not source.requirements:
+                raise ValueError(f"未从 {args.from_path} 提取到任何依赖项")
+
+            if source.is_pinned:
+                print(
+                    f"Lock file with {len(source.requirements)} pinned packages, "
+                    "skipping dependency resolution."
+                )
+                preview_requirements = source.requirements
+                manifest_lock_requirements = source.requirements
+                if not args.plan_only:
+                    result = downloader.download_resolved_requirements(
+                        source.requirements,
+                        dry_run=args.dry_run
+                    )
+            else:
+                resolved_packages, used_uv, resolver_warning = resolver.resolve(
+                    source.requirements
+                )
+                _print_resolution_state(resolver.get_last_resolution_state())
+                if resolver_warning:
+                    print(f"Warning: {resolver_warning}", file=sys.stderr)
+
+                preview_requirements = (
+                    resolved_packages if used_uv and resolved_packages else source.requirements
+                )
+                manifest_lock_requirements = (
+                    resolved_packages if used_uv and resolved_packages else None
+                )
+                if not args.plan_only:
+                    if used_uv and resolved_packages:
+                        result = downloader.download_resolved_requirements(
+                            resolved_packages,
+                            dry_run=args.dry_run
+                        )
+                        if (
+                            not args.dry_run
+                            and not result.get("success")
+                            and WheelDownloader._detect_no_wheel_reason(
+                                result.get("errors") or []
+                            )
+                        ):
+                            print(
+                                "Warning: uv 解析结果下载失败，回退到原始包列表重试。",
+                                file=sys.stderr
+                            )
+                            result = downloader.download_packages(
+                                source.requirements,
+                                dry_run=args.dry_run
+                            )
+                    else:
+                        result = downloader.download_packages(
+                            source.requirements,
+                            dry_run=args.dry_run
+                        )
         else:
             packages_input = [pkg.strip() for pkg in (args.packages or []) if pkg.strip()]
             if not packages_input:

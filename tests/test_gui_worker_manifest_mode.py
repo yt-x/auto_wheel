@@ -54,6 +54,7 @@ class GuiWorkerManifestModeTests(unittest.TestCase):
         return DownloadRequest(
             source_mode="packages",
             requirements_path=None,
+            from_path=None,
             packages=["requests==2.31.0"],
             python_version="3.9",
             output_dir=tmp_dir,

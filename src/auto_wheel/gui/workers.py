@@ -15,6 +15,7 @@ from ..config import Config
 from ..downloader import WheelDownloader
 from ..requirements_generator import RequirementsGenerator
 from ..resolver import DependencyResolver
+from ..source_reader import SourceReader
 from ..utils import get_python_version_warning, validate_python_version
 
 
@@ -66,6 +67,7 @@ class DownloadRequest:
 
     source_mode: str
     requirements_path: Optional[str]
+    from_path: Optional[str]
     packages: List[str]
     python_version: Optional[str]
     output_dir: Optional[str]
@@ -160,7 +162,6 @@ class DownloadWorker(QThread):
         if req.source_mode == "requirements":
             if not req.requirements_path:
                 raise ValueError("未提供 requirements 文件路径。")
-            # 保留 -r 原生语义：优先 uv，失败或不可用时直接透传 pip -r
             resolved_packages, used_uv, resolver_warning = resolver.resolve_from_requirements_file(req.requirements_path)
             for line in _format_resolution_state(resolver.get_last_resolution_state()):
                 self._log(line)
@@ -173,6 +174,41 @@ class DownloadWorker(QThread):
             else:
                 from ..utils import load_requirements
                 preview_requirements = load_requirements(req.requirements_path)
+        elif req.source_mode == "auto_detect":
+            if not req.from_path:
+                raise ValueError("未提供 --from 路径。")
+            reader = SourceReader(verbose=req.verbose)
+            source = reader.read(req.from_path)
+            self._log(
+                f"检测到源: {source.source_path} (type={source.source_type.value})"
+            )
+            for warning in source.warnings:
+                self._log(f"提示：{warning}")
+            if not source.requirements:
+                raise ValueError(f"未从 {req.from_path} 提取到任何依赖项")
+
+            if source.is_pinned:
+                self._log(
+                    f"锁文件包含 {len(source.requirements)} 个已锁定包，跳过依赖解析。"
+                )
+                preview_requirements = source.requirements
+                manifest_lock_requirements = source.requirements
+                used_uv = False
+                resolved_packages = None
+            else:
+                resolved_packages, used_uv, resolver_warning = resolver.resolve(
+                    source.requirements
+                )
+                for line in _format_resolution_state(resolver.get_last_resolution_state()):
+                    self._log(line)
+                if resolver_warning:
+                    self._log(f"解析提示：{resolver_warning}")
+                preview_requirements = (
+                    resolved_packages if used_uv and resolved_packages else source.requirements
+                )
+                manifest_lock_requirements = (
+                    resolved_packages if used_uv and resolved_packages else None
+                )
         else:
             packages_input = [pkg.strip() for pkg in req.packages if pkg.strip()]
             if not packages_input:
@@ -222,6 +258,32 @@ class DownloadWorker(QThread):
             else:
                 result = downloader.download_from_requirements(
                     req.requirements_path,
+                    dry_run=req.dry_run
+                )
+        elif req.source_mode == "auto_detect":
+            if source.is_pinned:
+                result = downloader.download_resolved_requirements(
+                    source.requirements,
+                    dry_run=req.dry_run
+                )
+            elif used_uv and resolved_packages:
+                result = downloader.download_resolved_requirements(
+                    resolved_packages,
+                    dry_run=req.dry_run
+                )
+                if (
+                    not req.dry_run
+                    and not result.get("success")
+                    and WheelDownloader._detect_no_wheel_reason(result.get("errors") or [])
+                ):
+                    self._log("uv 解析结果下载失败，回退到原始包列表重试。")
+                    result = downloader.download_packages(
+                        source.requirements,
+                        dry_run=req.dry_run
+                    )
+            else:
+                result = downloader.download_packages(
+                    source.requirements,
                     dry_run=req.dry_run
                 )
         else:
