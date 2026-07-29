@@ -63,3 +63,6 @@ autoresearch-hook-context.json
 autoresearch-launch.json
 autoresearch-runtime.json
 autoresearch-runtime.log
+
+CONSTRAINTS.md
+TODO.md
