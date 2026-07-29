@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
 )
 
+from ..config import Config
 from ..utils import validate_python_version
 from .workers import DownloadRequest
 
@@ -146,7 +147,7 @@ class ParameterForm(QWidget):
         form.addRow("输出目录：", output_row)
 
         self.config_path_edit = QLineEdit()
-        self.config_path_edit.setPlaceholderText("可选：config.json 路径")
+        self.config_path_edit.setPlaceholderText("可选：默认依次查找 ./config.json 与用户级配置")
         config_row = QHBoxLayout()
         config_row.addWidget(self.config_path_edit, stretch=1)
         config_btn = QPushButton("浏览")
@@ -197,12 +198,13 @@ class ParameterForm(QWidget):
 
         self.retries_spin = QSpinBox()
         self.retries_spin.setRange(1, 10)
-        self.retries_spin.setValue(3)
+        # 初始值与程序默认配置保持一致；GUI 中给出的值优先级高于配置文件
+        self.retries_spin.setValue(int(Config.DEFAULT_CONFIG["retries"]))
         form.addRow("最大重试次数：", self.retries_spin)
 
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(60, 1800)
-        self.timeout_spin.setValue(300)
+        self.timeout_spin.setValue(int(Config.DEFAULT_CONFIG["pip_timeout"]))
         form.addRow("命令超时（秒）：", self.timeout_spin)
 
         return group

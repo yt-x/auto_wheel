@@ -3,8 +3,29 @@ Configuration management module
 """
 
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+
+
+def default_user_config_path() -> Path:
+    """
+    Return the user-level config file path (cross-platform).
+
+    - Windows: %APPDATA%/auto_wheel/config.json
+    - POSIX:   $XDG_CONFIG_HOME/auto_wheel/config.json
+               (defaults to ~/.config/auto_wheel/config.json)
+    """
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "auto_wheel" / "config.json"
+    else:
+        xdg_config = os.environ.get("XDG_CONFIG_HOME")
+        if xdg_config:
+            return Path(xdg_config) / "auto_wheel" / "config.json"
+    return Path.home() / ".config" / "auto_wheel" / "config.json"
 
 
 class Config:
@@ -24,21 +45,33 @@ class Config:
 
     def __init__(self, config_path: Optional[str] = None) -> None:
         """
-        Initialize configuration
+        Initialize configuration.
+
+        Lookup order (first hit wins, program defaults as final fallback):
+            1. ``config_path`` explicitly given (CLI ``-c`` / GUI 配置文件字段）
+            2. ``./config.json`` in the current working directory
+            3. user-level config (see :func:`default_user_config_path`)
+            4. ``DEFAULT_CONFIG``
+
+        Values provided via CLI arguments or GUI fields always take
+        precedence over any config file; this class only resolves files.
 
         Args:
-            config_path: Path to config file. If None, searches for config.json in current directory
+            config_path: Path to config file. If None, searches the
+                current directory, then the user-level config path.
         """
         self.config_data: Dict[str, Any] = self.DEFAULT_CONFIG.copy()
+        # Path of the config file actually loaded; None when only defaults are used.
+        self.loaded_from: Optional[str] = None
 
-        # Try to load config file
         if config_path:
             self._load_config(config_path)
         else:
-            # Search for config.json in current directory
-            default_config = Path("config.json")
-            if default_config.exists():
-                self._load_config(str(default_config))
+            candidates = [Path("config.json"), default_user_config_path()]
+            for candidate in candidates:
+                if candidate.is_file():
+                    self._load_config(str(candidate))
+                    break
 
     def _load_config(self, config_path: str) -> None:
         """Load configuration from JSON file"""
@@ -46,11 +79,12 @@ class Config:
             with open(config_path, 'r', encoding='utf-8') as f:
                 user_config = json.load(f)
                 self.config_data.update(user_config)
+                self.loaded_from = config_path
         except FileNotFoundError:
-            print(f"Warning: Config file '{config_path}' not found. Using default configuration.")
+            print(f"Warning: Config file '{config_path}' not found. Using default configuration.", file=sys.stderr)
         except json.JSONDecodeError as e:
-            print(f"Warning: Failed to parse config file '{config_path}': {e}")
-            print("Using default configuration.")
+            print(f"Warning: Failed to parse config file '{config_path}': {e}", file=sys.stderr)
+            print("Using default configuration.", file=sys.stderr)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value"""
