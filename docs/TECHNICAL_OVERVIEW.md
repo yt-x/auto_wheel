@@ -42,6 +42,18 @@ CLI 与 GUI 通过统一的解析状态快照字段输出状态变化，便于�
 > **提示**：CLI 的 `--dry-run` 仍仅构建命令，不触发下载逻辑；若需要进一步调试，可结合 `-v` 查看每次尝试与等待周期。
 
 ## 3. 配置字段（`config.json`）
+
+配置查找顺序（第一个命中生效，均找不到则用程序内置默认值）：
+
+```text
+-c/--config 指定 > ./config.json > 用户级配置 > 程序默认值
+```
+
+- 用户级配置：Windows 为 `%APPDATA%\auto_wheel\config.json`；POSIX 为
+  `$XDG_CONFIG_HOME/auto_wheel/config.json`（默认 `~/.config/...`）。
+- CLI 参数 / GUI 表单显式值优先级高于任何配置文件。
+- `Config.loaded_from` 记录实际加载的配置文件路径（仅用默认值时为 `None`）。
+
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `index_url` | `""` | 主 PyPI/镜像源；为空取 `https://pypi.org/simple`。 |

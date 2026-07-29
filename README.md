@@ -1,82 +1,156 @@
 # Auto Wheel
 
-自动下载 Python wheel 包至本地，用于离线环境安装。
+Auto Wheel 是一个用于准备 Python 离线安装包的工具。它会根据目标 Python
+版本、平台和依赖输入下载 wheel 包，生成离线安装所需的 requirements 文件、
+安装脚本、源码包处理指引和可选校验报告。
 
-## 功能特性
+当前实现同时提供命令行工具和桌面 GUI：
 
-- 自动下载指定 Python 版本的 wheel 包及其所有依赖
-- 默认优先下载 wheel；仅在识别到“无可用 wheel/发行版”时自动回退下载源码包
-- 支持从 requirements.txt 批量下载
-- 支持指定目标平台（Windows/Linux/macOS）
-- 自动生成离线安装用的 requirements.txt
-- 自动分流源码包到 `sources/` 并生成处理指引
-- 支持生成 hash 校验（安全安装）
-- 支持配置文件自定义 PyPI 镜像源
-- 自动生成离线安装脚本
-- 支持依赖树预览模式（`--plan-only`）与确认闸口（`--approve-tree`）
-- 支持离线可安装性预演（`--verify-installability`）
+- CLI：`auto-wheel`
+- GUI：`auto-wheel-gui`
+
+## 主要能力
+
+- 从 `requirements.txt`、包名列表或项目目录自动识别依赖来源。
+- 支持读取 `pyproject.toml` 的 `project.dependencies`。
+- 支持读取 TOML lock 文件中的 registry 包，并跳过 git / directory 等非 registry 来源。
+- 默认优先使用 `uv pip compile` 解析目标环境依赖。
+- 未安装 uv、uv 失败或禁用 uv 时，保留 pip 原始下载流程。
+- 支持目标 Python 版本、平台、实现和 ABI 参数。
+- 默认 wheel 优先下载；仅在识别到无可用 wheel / 发行版时，自动回退下载源码包。
+- 自动把源码包分流到 `sources/`，并生成 `sources-offline.txt` 与 `SOURCE_INSTALL_GUIDE.md`。
+- 生成离线安装清单 `requirements-offline.txt`，支持 hash 校验。
+- 生成 `install.sh` 和 `install.bat`。
+- 支持依赖预览模式，生成 `dependency-tree.json`、`dependency-tree.txt` 和 `coverage-report.md`。
+- 支持确认闸口输入 `--approve-tree`。
+- 支持下载后离线可安装性预演，生成 `installability-report.md`。
+- 支持 PyQt6 + qt-material 桌面 GUI。
 
 ## 安装
 
-```bash
-# 克隆项目
-git clone <repository-url>
-cd auto_wheel
-
-# 安装依赖
+```powershell
 python -m pip install -e .
 ```
+
+安装 GUI 依赖：
+
+```powershell
+python -m pip install -e ".[gui]"
+```
+
+项目要求 Python `>=3.8`。
+
+基础依赖来自 `pyproject.toml`：
+
+- `pip>=21.0`
+- `packaging>=21.0`
+- `tqdm>=4.62.0`
 
 ## 快速开始
 
-### 基本用法
+从 requirements 文件下载：
 
-```bash
-# 从 requirements.txt 下载包（Python 3.9）
+```powershell
 auto-wheel -p 3.9 -r requirements.txt
+```
 
-# 下载特定的包
+下载指定包：
+
+```powershell
 auto-wheel -p 3.9 -pkg requests flask pandas
-
-# 指定输出目录
-auto-wheel -p 3.9 -r requirements.txt -o ./my_wheels
 ```
 
-### 跨平台下载
+指定输出目录：
 
-```bash
-# 在 Windows 上为 Linux 服务器下载包
+```powershell
+auto-wheel -p 3.9 -r requirements.txt -o .\downloads-py39
+```
+
+从项目目录自动识别依赖来源：
+
+```powershell
+auto-wheel -p 3.9 --from .\my-project
+```
+
+直接指定依赖来源文件：
+
+```powershell
+auto-wheel -p 3.9 --from .\my-project\uv.lock
+auto-wheel -p 3.9 --from .\my-project\pyproject.toml
+auto-wheel -p 3.9 --from .\my-project\requirements.txt
+```
+
+模拟运行，不实际下载：
+
+```powershell
+auto-wheel -p 3.9 -pkg requests --dry-run
+```
+
+## 依赖输入方式
+
+CLI 的输入源三选一：
+
+```text
+-r, --requirements <file>     读取 requirements.txt
+-pkg, --packages <items...>   直接传入包名或版本约束
+--from <path>                 自动识别文件或目录中的依赖来源
+```
+
+`--from` 支持：
+
+- TOML lock 文件：读取 `package` 列表中的 registry 依赖，生成 `name==version`。
+- `pyproject.toml`：读取 `[project] dependencies`。
+- requirements 文本文件：按 requirements 行读取。
+- 目录：扫描目录下的普通文件，选择优先级最高的可识别依赖源。
+
+目录自动识别的优先级是：
+
+```text
+lock file > pyproject.toml > requirements.txt
+```
+
+注意：
+
+- lock 文件被视为已锁定依赖，下载时跳过二次依赖解析。
+- `pyproject.toml` 和 requirements 输入会优先尝试 uv 解析。
+- lock 文件中的 git、directory 等非 registry 来源会被跳过，并在日志中提示。
+
+## 目标环境参数
+
+常用参数：
+
+```powershell
 auto-wheel -p 3.9 -r requirements.txt --platform manylinux2014_x86_64
-
-# 常见平台标识：
-# - Windows: win_amd64, win32
-# - Linux: manylinux2014_x86_64, manylinux2014_aarch64
-# - macOS: macosx_10_9_x86_64, macosx_11_0_arm64
 ```
 
-### 安全安装（带 hash 校验）
+可配置项：
 
-```bash
-# 生成带 hash 的 requirements.txt
-auto-wheel -p 3.9 -r requirements.txt --with-hashes
+```text
+-p, --python-version   目标 Python 版本，例如 3.9、3.10、3.11
+--platform             目标平台，例如 win_amd64、manylinux2014_x86_64、macosx_11_0_arm64
+--implementation       Python 实现，默认 cp
+--abi                  Python ABI；未传入时根据 Python 版本自动推断
+--only-binary          wheel 优先策略，默认 :all:
 ```
 
-### 高级模式（预览/确认/预演）
+常见平台值：
 
-```bash
-# 1) 仅解析并生成依赖树预览（不下载）
-auto-wheel -p 3.9 -pkg requests==2.31.0 --plan-only -o ./preview
-
-# 2) 基于已确认依赖树执行下载（可配合 --dry-run）
-auto-wheel -p 3.9 -pkg requests==2.31.0 --approve-tree ./preview/dependency-tree.json -o ./downloads
-
-# 3) 下载完成后执行离线可安装性预演
-auto-wheel -p 3.9 -r requirements.txt --verify-installability -o ./downloads
-```
+- Windows x64：`win_amd64`
+- Windows x86：`win32`
+- Linux x64：`manylinux2014_x86_64`
+- Linux ARM64：`manylinux2014_aarch64`
+- macOS Intel：`macosx_10_9_x86_64`
+- macOS Apple Silicon：`macosx_11_0_arm64`
 
 ## 配置文件
 
-可以创建 `config.json` 来自定义设置：
+可以通过 `-c/--config` 指定 JSON 配置文件：
+
+```powershell
+auto-wheel -p 3.9 -r requirements.txt -c config.json
+```
+
+配置示例：
 
 ```json
 {
@@ -92,366 +166,378 @@ auto-wheel -p 3.9 -r requirements.txt --verify-installability -o ./downloads
 }
 ```
 
-使用配置文件：
+字段说明：
 
-```bash
-auto-wheel -p 3.9 -r requirements.txt -c config.json
+- `index_url`：主包索引地址；空字符串表示使用 pip 默认源。
+- `trusted_hosts`：传给 pip 的 `--trusted-host`。
+- `extra_index_urls`：额外包索引地址。
+- `default_python_version`：未传 `-p` 时使用的默认 Python 版本。
+- `default_platform`：未传 `--platform` 时使用的默认平台，默认 `auto`。
+- `download_dir`：未传 `-o` 时使用的输出目录。
+- `pip_timeout`：pip 单次网络请求超时时间，单位秒。
+- `retries`：pip 重试次数，同时用于下载器最大尝试次数。
+- `use_uv_resolver`：是否优先启用 uv 依赖解析。
+
+如果不显式指定配置文件，工具按以下顺序查找，命中的第一个文件生效：
+
+```text
+-c/--config 指定 > 当前目录 ./config.json > 用户级配置 > 程序内置默认值
 ```
 
-### 依赖解析（默认启用 uv）
+用户级配置路径：
 
-`pip download --python-version` 在跨版本场景下可能无法获取条件依赖（例如 Python 3.9 + pytest 需要 `exceptiongroup`）。
-配置 `"use_uv_resolver": true` 且安装 [uv](https://github.com/astral-sh/uv) 后，auto-wheel 会先运行 `uv pip compile` 生成完整依赖，再执行 `pip download`。
+- Windows：`%APPDATA%\auto_wheel\config.json`
+- Linux / macOS：`$XDG_CONFIG_HOME/auto_wheel/config.json`（默认 `~/.config/auto_wheel/config.json`）
 
-优点：
+任何位置都找不到配置文件时，使用程序内置默认值。CLI 参数和 GUI 表单中
+显式给出的值（如 `-p`、`-o`、`--platform`、重试次数、超时）优先级始终
+高于配置文件。
 
-- 正确处理环境标记，避免条件依赖缺失。
-- 解析速度更快。
+## uv 解析与 pip 回退
 
-未安装 uv 时，会自动回退至 pip 原始流程，并在日志中提示可能缺失条件依赖。
+默认配置 `use_uv_resolver=true`。当系统能找到 `uv` 时，Auto Wheel 会先执行
+`uv pip compile`，为目标 Python 版本和目标平台生成更完整的依赖列表。
 
-安装 uv 示例：
+uv 解析成功时：
+
+- 下载阶段使用 uv 解析出的锁定依赖列表。
+- 离线清单进入 `lock` 模式。
+
+uv 不可用、解析失败或配置禁用时：
+
+- 工具回退到 pip 原始输入流程。
+- requirements 文件会直接透传给 `pip download -r`。
+- 包名列表和 `pyproject.toml` 依赖会按原始列表下载。
+- 离线清单通常进入 `non_lock` 模式。
+
+CLI 和 GUI 都会输出解析状态，便于判断当前使用的是 uv 还是 pip 回退路径。
+
+## wheel 优先与源码回退
+
+默认下载策略是 wheel 优先：
+
+```text
+--only-binary :all:
+```
+
+下载器先执行 wheel-only 下载。只有当错误文本被识别为“无可用 wheel / 无匹配发行版”
+并通过探测确认后，才会进入源码回退流程。
+
+源码回退成功时，输出目录会包含：
+
+```text
+downloads/
+  *.whl
+  requirements-offline.txt
+  manifest-reconciliation.json
+  install.sh
+  install.bat
+  sources/
+    *.tar.gz / *.zip
+  sources-offline.txt
+  SOURCE_INSTALL_GUIDE.md
+  source-fallback-report.json
+```
+
+如果存在源码包，离线机器上需要先阅读 `SOURCE_INSTALL_GUIDE.md`，处理
+`sources/` 中的源码包，再安装常规 wheel 依赖。
+
+安装脚本会检查源码包清单；如果发现未处理的源码包，会阻断安装并提示先处理源码包。
+
+## 依赖预览与确认
+
+仅生成依赖预览，不执行下载：
 
 ```powershell
-# Windows PowerShell
-irm https://astral.sh/uv/install.ps1 | iex
-
-# macOS/Linux
-curl -Ls https://astral.sh/uv/install.sh | sh
+auto-wheel -p 3.9 -pkg requests==2.31.0 --plan-only -o .\preview
 ```
 
-安装完成后执行 `uv --version` 验证即可。
+生成文件：
 
-### 配置说明
-
-- `index_url`: PyPI 镜像源地址（留空使用官方源）
-- `trusted_hosts`: 可信任的主机列表（使用 HTTP 源时需要）
-- `extra_index_urls`: 额外的包索引地址
-- `default_python_version`: 默认 Python 版本
-- `default_platform`: 默认目标平台
-- `download_dir`: 下载目录
-- `pip_timeout`: pip 单次网络请求超时时间（秒）
-- `retries`: 重试次数
-- `use_uv_resolver`: 是否启用 uv pip compile 解析（默认 true）
-
-### 常用镜像源
-
-```json
-{
-  "index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
-  "trusted_hosts": ["pypi.tuna.tsinghua.edu.cn"]
-}
+```text
+preview/
+  dependency-tree.json
+  dependency-tree.txt
+  coverage-report.md
 ```
 
-其他国内镜像：
-- 清华：`https://pypi.tuna.tsinghua.edu.cn/simple`
-- 阿里云：`https://mirrors.aliyun.com/pypi/simple/`
-- 中科大：`https://pypi.mirrors.ustc.edu.cn/simple/`
-- 豆瓣：`https://pypi.douban.com/simple/`
+基于已确认的依赖树继续下载：
+
+```powershell
+auto-wheel -p 3.9 -pkg requests==2.31.0 --approve-tree .\preview\dependency-tree.json -o .\downloads
+```
+
+约束：
+
+- `--plan-only` 和 `--approve-tree` 不能同时使用。
+- `--approve-tree` 指向的文件必须存在。
+- 确认文件中的目标 Python 和平台需要与当前命令匹配。
+
+## 离线清单模式
+
+下载完成后，`requirements-offline.txt` 会标注 manifest 模式。
+
+`lock` 模式：
+
+- 有 resolver 锁定依赖列表。
+- 离线 requirements 直接来自锁定列表。
+- 版本一致性更强。
+
+`non_lock` 模式：
+
+- 没有锁定依赖列表。
+- 离线 requirements 通过扫描输出目录中的 wheel 推断生成。
+- 如果复用旧输出目录，历史残留文件可能影响结果。
+
+建议生产任务使用独立输出目录，并尽量保证 uv 可用，以获得 `lock` 模式清单。
+
+每次生成清单都会生成：
+
+```text
+manifest-reconciliation.json
+```
+
+对账报告会记录：
+
+- 锁定清单中缺失的产物。
+- 仅有源码包的依赖。
+- 输出目录中存在但不在锁定清单里的额外产物。
+
+## hash 校验
+
+生成带 hash 的离线 requirements：
+
+```powershell
+auto-wheel -p 3.9 -r requirements.txt --with-hashes
+```
+
+当 wheel 文件存在时，`requirements-offline.txt` 会写入对应的 SHA256 hash。
+离线安装时 pip 会校验文件完整性。
+
+## 离线可安装性预演
+
+下载后执行离线安装预演：
+
+```powershell
+auto-wheel -p 3.9 -r requirements.txt --verify-installability -o .\downloads
+```
+
+工具会生成：
+
+```text
+downloads/installability-report.md
+```
+
+如果预演失败，CLI 退出码为 `2`，并提示查看报告。
 
 ## 离线安装
 
-下载完成后，将 `downloads` 文件夹复制到离线机器，然后：
+将输出目录复制到离线机器后，先激活虚拟环境：
 
-> 重要：请先激活 `venv/conda` 虚拟环境。安装脚本会拒绝在全局 Python 环境执行。
-> 若目录中存在 `sources-offline.txt`，请先按 `SOURCE_INSTALL_GUIDE.md` 处理源码包，再执行常规离线安装。
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
 
-### 方法 1：使用自动生成的安装脚本
+Windows：
+
+```powershell
+cd downloads
+.\install.bat
+```
+
+Linux / macOS：
 
 ```bash
-# Linux/Mac
 cd downloads
 ./install.sh
-
-# Windows
-cd downloads
-install.bat
 ```
 
-> 脚本会先检查源码包清单。若检测到待处理源码包，会直接退出并提示先处理 `sources/`。
+也可以直接使用 pip：
 
-### 方法 2：使用 pip 命令
-
-```bash
-# 先确认源码包已按 SOURCE_INSTALL_GUIDE.md 处理完成
-python -m pip install --no-index --find-links=downloads -r downloads/requirements-offline.txt
+```powershell
+python -m pip install --no-index --find-links=downloads -r downloads\requirements-offline.txt
 ```
 
-### 方法 3：安装单个包
+重要：
 
-```bash
-python -m pip install --no-index --find-links=downloads package_name
-```
+- 不要在全局 Python 环境中执行离线安装。
+- 如果存在 `sources-offline.txt`，先按 `SOURCE_INSTALL_GUIDE.md` 处理源码包。
+- 处理完源码包后，再安装 `requirements-offline.txt` 中的 wheel 依赖。
 
-## 命令行参数
+## GUI
 
-```
-输入参数（二选一）：
-  -r, --requirements      requirements.txt 文件路径
-  -pkg, --packages        包名列表 (空格分隔)
+安装 GUI 依赖后启动：
 
-可选参数：
-  -p, --python-version    目标 Python 版本 (如: 3.9, 3.10，留空可使用配置默认值)
-  -o, --output           输出目录 (默认: ./downloads)
-  -c, --config           配置文件路径
-  --platform             目标平台 (如: manylinux2014_x86_64)
-  --implementation       Python 实现 (默认: cp for CPython)
-  --abi                  Python ABI 标签
-  --only-binary          优先只下载二进制包 (默认: :all:；无 wheel 时自动回退源码下载)
-  --with-hashes          生成带 hash 的 requirements.txt
-  -v, --verbose          详细输出
-  --dry-run              模拟运行，不实际下载
-  --plan-only            仅解析依赖并生成预览产物（dependency-tree.json/coverage-report.md），不执行下载
-  --approve-tree         指定已确认的 dependency-tree.json 作为确认闸口（在 --plan-only 生成后使用）
-  --verify-installability 下载完成后执行离线可安装性预演并生成 installability-report.md
-```
-
-### 配置示例文件
-
-创建 `config.json`：
-
-```json
-{
-  "index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
-  "trusted_hosts": ["pypi.tuna.tsinghua.edu.cn"],
-  "extra_index_urls": [],
-  "default_python_version": "3.9",
-  "default_platform": "auto",
-  "download_dir": "./downloads",
-  "pip_timeout": 300,
-  "retries": 3,
-  "use_uv_resolver": true
-}
-```
-
-## 示例场景
-
-### 场景 1：为生产服务器准备包
-
-```bash
-# 1. 在有网络的机器上下载
-auto-wheel -p 3.9 -r requirements.txt --platform manylinux2014_x86_64 --with-hashes
-
-# 2. 复制 downloads 文件夹到服务器
-
-# 3. 如存在 sources-offline.txt，先按 SOURCE_INSTALL_GUIDE.md 处理源码包
-
-# 4. 在服务器上安装 wheel 依赖
-python -m pip install --no-index --find-links=downloads -r downloads/requirements-offline.txt
-```
-
-### 场景 2：使用私有镜像源
-
-创建 `config.json`:
-
-```json
-{
-  "index_url": "https://pypi.tuna.tsinghua.edu.cn/simple",
-  "trusted_hosts": ["pypi.tuna.tsinghua.edu.cn"],
-  "pip_timeout": 600
-}
-```
-
-运行：
-
-```bash
-auto-wheel -p 3.9 -r requirements.txt -c config.json
-```
-
-### 场景 3：准备多个 Python 版本的包
-
-```bash
-# Python 3.9
-auto-wheel -p 3.9 -r requirements.txt -o downloads/py39
-
-# Python 3.10
-auto-wheel -p 3.10 -r requirements.txt -o downloads/py310
-
-# Python 3.11
-auto-wheel -p 3.11 -r requirements.txt -o downloads/py311
-```
-
-## 技术说明
-
-> 想了解整体架构、重试策略、GUI 方案与离线脚本细节，可参阅 `docs/TECHNICAL_OVERVIEW.md` 与 `docs/GUI_DESIGN.md`。
-
-### 桌面 GUI（可选）
-
-项目提供 PyQt6 + qt-material 实现的桌面客户端，覆盖常用参数配置与日志查看。
-
-```bash
-# 安装 GUI 依赖
-python -m pip install -e .[gui]
-
-# 启动客户端
+```powershell
+python -m pip install -e ".[gui]"
 auto-wheel-gui
 ```
 
-核心特性：
+GUI 支持：
 
-- 纯代码构建界面，包含参数表单、日志控制台、进度展示与输出目录快捷打开。
-- 集成 `qt-material`，支持亮/暗主题切换并自动记忆用户偏好。
-- 行为与 CLI 完全一致，底层调用 `WheelDownloader` 与 `RequirementsGenerator`，不会影响现有命令行流程。
+- requirements、包名列表、自动识别来源三种输入模式。
+- Python 版本、平台、实现、ABI、输出目录和配置文件设置。
+- dry-run、hash、verbose、预览模式。
+- 依赖树确认闸口。
+- 下载日志、完成状态和输出目录快捷打开。
+- qt-material 主题切换与偏好保存。
 
-### 依赖解析
+GUI 后台线程复用 CLI 的核心模块：
 
-工具使用两阶段策略：
-1) 优先通过 `uv pip compile` 按目标 Python 版本/平台解析依赖，正确处理条件依赖（如 pytest<3.11 需要 exceptiongroup/tomli）。
-2) 使用 `pip download` 按解析结果下包。
+- `WheelDownloader`
+- `DependencyResolver`
+- `RequirementsGenerator`
+- `SourceReader`
 
-当 uv 未安装（或手动配置 `use_uv_resolver:false`）时，会自动回退至 pip 直接下载流程，可能缺失跨版本条件依赖，日志会提示。
+## 命令行参数摘要
 
-### 离线清单生成模式（lock / non-lock）
+```text
+输入源（三选一）:
+  -r, --requirements FILE
+  -pkg, --packages PACKAGE [PACKAGE ...]
+  --from PATH
 
-下载完成后，`requirements-offline.txt` 采用以下模式生成：
+目标环境:
+  -p, --python-version VERSION
+  --platform PLATFORM
+  --implementation IMPLEMENTATION
+  --abi ABI
 
-- `lock`：若解析阶段得到锁定依赖列表（通常为 uv 成功场景），离线清单直接使用该锁定列表生成，不再按目录扫描推断版本。
-- `non_lock`：若未得到锁定依赖列表（如 uv 不可用并回退 pip 原生流程），离线清单会从下载目录扫描生成。
+输出与配置:
+  -o, --output DIR
+  -c, --config FILE
 
-CLI/GUI 会输出：
+行为开关:
+  --only-binary VALUE
+  --with-hashes
+  --dry-run
+  --plan-only
+  --approve-tree FILE
+  --verify-installability
+  -v, --verbose
+```
 
-- `Manifest mode: lock|non_lock`
-- `Manifest reconciliation report: <path>`
+查看完整帮助：
 
-其中对账报告会标注：
+```powershell
+auto-wheel --help
+```
 
-- `missing_from_artifacts`：锁定清单里缺失的产物
-- `source_only`：仅有源码包的锁定依赖
-- `extra_artifacts_not_in_lock`：目录中存在但不在锁定清单内的额外产物（常见于复用目录历史残留）
+## 项目结构
 
-建议：生产使用尽量保证 `lock` 模式，并为每次任务使用独立输出目录。
+```text
+auto_wheel/
+  pyproject.toml
+  QUICKSTART.md
+  README.md
+  src/
+    auto_wheel/
+      __init__.py
+      main.py
+      cli.py
+      config.py
+      resolver.py
+      downloader.py
+      requirements_generator.py
+      source_reader.py
+      state_model.py
+      approval_gate.py
+      inspector.py
+      utils.py
+      gui/
+        __init__.py
+        app.py
+        forms.py
+        main_window.py
+        theme.py
+        workers.py
+  tests/
+    test_approval_gate.py
+    test_downloader_fallback.py
+    test_gui_worker_manifest_mode.py
+    test_installability_check.py
+    test_legacy_regression_fixtures.py
+    test_main_verify_exit.py
+    test_manifest_generation.py
+    test_preview_and_cli.py
+    test_resolver.py
+    test_source_reader.py
+    test_state_model.py
+```
 
-### 平台兼容性
+核心模块职责：
 
-- 纯 Python 包：会下载 `py3-none-any.whl`，适用所有平台
-- 平台相关包：需要指定 `--platform` 参数
-- 某些包可能没有预编译的 wheel，会下载源码包（.tar.gz 或 .zip）并放入 `sources/`
-- 当首轮 wheel-only 失败且命中“无可用发行版”特征时，会自动移除 `--only-binary` 重试一次
-- 若有源码包，工具会生成 `sources-offline.txt` 和 `SOURCE_INSTALL_GUIDE.md`
-
-### 本次改动复盘（apache-iotdb）
-
-#### 原因分析
-
-- 仅依赖 `--only-binary :all:` 时，`apache-iotdb` 依赖链中的部分包在目标环境不存在可用 wheel，会导致 `pip download` 直接失败。
-- 在 `uv` 解析结果路径下，可能出现“解析能锁定版本，但目标环境无对应发行版”的情况（例如日志中的 `greenlet` / `thrift`）。
-- 即使触发源码回退，如果仍沿用目标解释器/平台约束参数，`pip` 会拒绝执行源码下载。
-
-#### 解决思路
-
-- 保持“wheel 优先”不变，仅在可识别的“无可用发行版”错误下触发源码回退。
-- 回退阶段保持目标约束语义并启用 source-only 策略，避免主机平台 wheel 污染目标结果。
-- 对 `uv` 路径增加兜底：当 uv 解析列表下载失败且命中“无可用发行版”特征时，自动回退到原始包列表重试。
-
-#### 实际解决方式
-
-- 下载器返回结构新增：
-  - `used_source_fallback`：是否触发源码回退
-  - `fallback_reason`：触发回退的判定原因
-- CLI/GUI 新增统一提示：
-  - 回退成功时明确提示先处理 `SOURCE_INSTALL_GUIDE.md`
-  - 回退失败时输出分阶段线索（`wheel_only` / `source_fallback`）
-- `-pkg` 场景修正为：仅 `uv` 成功时走“解析列表下载”；否则回退原始包列表下载。
-
-> 若日志出现“`uv 解析结果下载失败，回退到原始包列表重试`”并最终成功，这是预期行为，不是错误状态。
-
-### Hash 校验
-
-使用 `--with-hashes` 选项会：
-1. 计算每个下载包的 SHA256 hash
-2. 在 requirements.txt 中包含 hash 值
-3. 安装时 pip 会验证包完整性，防止篡改
-
-## 注意事项
-
-1. 某些包可能需要编译，确保离线环境有相应的编译工具
-2. 跨平台下载时，仔细确认目标平台标识
-3. 使用 `--dry-run` 预览下载操作
-4. 大型项目可能下载数百个包，需要较大存储空间
-5. Python 版本差异可能导致包不兼容，建议版本精确匹配
-
-## 故障排除
-
-### 问题：找不到某个包的 wheel
-
-解决方案：
-- 检查包是否支持目标 Python 版本
-- 尝试不指定 `--platform`，让工具自动选择
-- 某些包只有源码，需要在目标机器上编译
-- 若看到 `wheel_only` 失败但最终 `Download completed successfully`，说明已自动回退到源码下载路径
-
-### 问题：下载超时
-
-解决方案：
-- 增加 config.json 中的 `pip_timeout` 值
-- 使用国内镜像源
-- 增加 `retries` 重试次数
-
-### 问题：离线安装失败
-
-解决方案：
-- 检查 Python 版本是否匹配
-- 使用 `--with-hashes` 时确保使用完整的 requirements 文件
-- 检查平台是否匹配
-- 检查 `Manifest mode`。若为 `non_lock`，建议改用独立输出目录并启用 uv 后重试
-- 检查 `manifest-reconciliation.json` 中是否存在 `extra_artifacts_not_in_lock`
-
-### 问题：安装脚本提示“检测到源码包清单”并退出
-
-解决方案：
-- 先查看 `downloads/SOURCE_INSTALL_GUIDE.md`
-- 按 `downloads/sources-offline.txt` 逐个处理 `downloads/sources/` 中的源码包
-- 源码包处理完成后，再执行 `python -m pip install --no-index --find-links=downloads -r downloads/requirements-offline.txt`
+- `main.py`：CLI 主流程编排。
+- `cli.py`：参数定义与校验。
+- `config.py`：配置读取与 pip 参数生成。
+- `resolver.py`：uv 依赖解析与 pip 回退状态管理。
+- `downloader.py`：pip download、重试、wheel-only、源码回退。
+- `requirements_generator.py`：离线清单、安装脚本、预览和校验报告生成。
+- `source_reader.py`：`--from` 依赖来源识别。
+- `state_model.py`：任务、依赖和产物状态模型。
+- `approval_gate.py`：依赖树确认闸口判断。
+- `inspector.py`：包元数据与 wheel 兼容性检查。
+- `gui/`：PyQt6 桌面界面。
 
 ## 开发与测试
 
-项目使用 Python 标准库 `unittest` 编写测试，无需额外安装 pytest。
+安装项目：
 
-### 运行全部测试
-
-```bash
-# 确保已安装项目（可编辑模式）
+```powershell
 python -m pip install -e .
+```
 
-# 运行全部测试
+运行全部测试：
+
+```powershell
 python -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-### 运行单个测试文件
+运行单个测试文件：
 
-```bash
-# 测试 CLI 与预览功能
-python -m unittest tests.test_preview_and_cli -v
-
-# 测试下载回退逻辑
-python -m unittest tests.test_downloader_fallback -v
-
-# 测试清单生成
-python -m unittest tests.test_manifest_generation -v
-
-# 测试依赖解析
+```powershell
 python -m unittest tests.test_resolver -v
+python -m unittest tests.test_manifest_generation -v
+python -m unittest tests.test_downloader_fallback -v
 ```
 
-### 测试覆盖范围
+测试覆盖重点：
 
-| 测试文件 | 覆盖内容 |
-|---------|---------|
-| `test_preview_and_cli.py` | CLI 参数解析、`--plan-only` 与 `--approve-tree` 互斥、预览产物生成 |
-| `test_downloader_fallback.py` | wheel 优先策略、无 wheel 自动回退源码、直接 sdist 获取 |
-| `test_manifest_generation.py` | lock / non-lock 模式清单生成、hash 校验保留 |
-| `test_resolver.py` | uv/pip 依赖解析、平台转换、错误分类 |
-| `test_approval_gate.py` | 确认闸口逻辑（允许/阻断/跳过） |
-| `test_installability_check.py` | 离线可安装性预演报告生成 |
-| `test_main_verify_exit.py` | `--verify-installability` 失败时的退出码 |
-| `test_state_model.py` | 状态模型枚举与序列化 |
-| `test_legacy_regression_fixtures.py` | 历史问题回归（无 wheel 原因检测、stage 摘要） |
-| `test_gui_worker_manifest_mode.py` | GUI Worker 的 manifest 模式透传 |
+- CLI 参数校验、预览模式和确认闸口。
+- uv 解析成功、不可用、失败分类和 pip 回退状态。
+- wheel-only 成功、无 wheel 源码回退、回退失败摘要。
+- lock / non_lock 清单生成和 hash 保留。
+- SourceReader 对 lock、pyproject、requirements、目录扫描的处理。
+- 离线可安装性预演报告与失败退出码。
+- GUI worker 对 manifest lock 依赖的透传。
 
-## 许可证
+## 常见问题
+
+### 未安装 uv 会失败吗？
+
+不会。默认会提示 uv 不可用，然后回退到 pip 原始流程。但跨 Python 版本或平台解析时，
+pip 原始流程可能不如 uv 完整。
+
+### 为什么出现 non_lock 模式？
+
+通常是因为没有 resolver 锁定依赖列表，例如 uv 不可用或解析失败。此时清单从下载目录
+扫描 wheel 文件生成。建议使用独立输出目录，避免历史残留影响结果。
+
+### 出现源码包后能直接离线安装吗？
+
+不能直接忽略。需要先查看 `SOURCE_INSTALL_GUIDE.md` 和 `sources-offline.txt`，处理
+`sources/` 中的源码包，再安装常规 wheel 依赖。
+
+### `--plan-only` 会判断 wheel 是否可用吗？
+
+不会。预览阶段只记录依赖解析结果，`wheel_ready`、`source_required` 等状态要到下载阶段
+才能确认。
+
+### `--approve-tree` 和 `--plan-only` 能一起使用吗？
+
+不能。先运行 `--plan-only` 生成依赖树，再用新的命令传入 `--approve-tree` 执行下载。
+
+## License
 
 MIT License
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
