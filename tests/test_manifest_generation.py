@@ -39,6 +39,11 @@ class ManifestGenerationTests(unittest.TestCase):
 
         content = Path(req_file).read_text(encoding="utf-8")
         self.assertIn("Manifest mode: lock", content)
+        self.assertIn(
+            f"python -m pip install --no-index --find-links={out_dir.name} "
+            f"-r {out_dir.name}/requirements-offline.txt",
+            content,
+        )
         self.assertIn("sqlalchemy==2.0.40", content)
         self.assertNotIn("sqlalchemy==2.0.49", content)
 

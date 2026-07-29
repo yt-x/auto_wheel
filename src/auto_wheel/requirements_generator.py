@@ -167,7 +167,8 @@ class RequirementsGenerator:
             f.write("# Generated offline requirements file\n")
             f.write(
                 f"# Install in an activated virtual environment with: "
-                f"python -m pip install --no-index --find-links={self.output_dir.name} -r {output_file}\n"
+                f"python -m pip install --no-index --find-links={self.output_dir.name} "
+                f"-r {self.output_dir.name}/{output_file}\n"
             )
             f.write(f"# Manifest mode: {manifest_mode}\n")
             if manifest_mode == "lock":
